@@ -1,45 +1,46 @@
 use bincode::{BorrowDecode, Decode, Encode};
 use std::cmp::Ordering;
 
-use super::FileChunk;
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct HashValue(pub blake3::Hash);
 
-impl PartialOrd for FileChunk {
+impl PartialOrd for HashValue {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for FileChunk {
+impl Ord for HashValue {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.hash.as_bytes().cmp(other.hash.as_bytes())
+        self.0.as_bytes().cmp(other.0.as_bytes())
     }
 }
 
-impl Encode for FileChunk {
+impl Encode for HashValue {
     fn encode<E: bincode::enc::Encoder>(
         &self,
         encoder: &mut E,
     ) -> Result<(), bincode::error::EncodeError> {
-        self.hash.as_bytes().encode(encoder)
+        self.0.as_bytes().encode(encoder)
     }
 }
 
-impl<'de> BorrowDecode<'de> for FileChunk {
+impl<'de> BorrowDecode<'de> for HashValue {
     fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(FileChunk {
-            hash: blake3::Hash::from_bytes(<_>::decode(decoder)?),
+        Ok(HashValue {
+            0: blake3::Hash::from_bytes(<_>::decode(decoder)?),
         })
     }
 }
 
-impl Decode for FileChunk {
+impl Decode for HashValue {
     fn decode<D: bincode::de::Decoder>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(FileChunk {
-            hash: blake3::Hash::from_bytes(<_>::decode(decoder)?),
+        Ok(HashValue {
+            0: blake3::Hash::from_bytes(<_>::decode(decoder)?),
         })
     }
 }

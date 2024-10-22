@@ -1,3 +1,5 @@
+use blober::{Blob, HashStore};
+
 use super::*;
 
 #[test]
@@ -6,7 +8,7 @@ fn test_from_bytes_and_verify() {
     let chunk_size = 8;
     let padded_data = pad_to_chunk_size(&data, chunk_size);
 
-    let file_content = FileContent::from_bytes(&padded_data, chunk_size);
+    let file_content = Blob::from_bytes(&padded_data, chunk_size);
 
     assert_eq!(file_content.chunk_size, chunk_size);
     assert_eq!(file_content.chunks.len(), padded_data.len() / chunk_size);
@@ -22,7 +24,7 @@ fn test_from_bytes_and_verify() {
 fn test_empty_input() {
     let data = vec![];
     let chunk_size = 4;
-    let file_content = FileContent::from_bytes(&data, chunk_size);
+    let file_content = Blob::from_bytes(&data, chunk_size);
 
     assert_eq!(file_content.chunk_size, chunk_size);
     assert_eq!(file_content.chunks.len(), 0);
@@ -47,17 +49,16 @@ fn test_bincode_serialization() {
     let chunk_size = 8;
     let padded_data = pad_to_chunk_size(&data, chunk_size);
 
-    let original_content = FileContent::from_bytes(&padded_data, chunk_size);
+    let original_content = Blob::from_bytes(&padded_data, chunk_size);
 
     // Serialize
     let encoded: Vec<u8> =
         bincode::encode_to_vec(&original_content, bincode::config::standard()).unwrap();
 
     // Deserialize
-    let decoded_content: FileContent =
-        bincode::decode_from_slice(&encoded, bincode::config::standard())
-            .unwrap()
-            .0;
+    let decoded_content: Blob = bincode::decode_from_slice(&encoded, bincode::config::standard())
+        .unwrap()
+        .0;
 
     // Verify the deserialized content matches the original
     assert_eq!(original_content.chunk_size, decoded_content.chunk_size);
@@ -84,8 +85,8 @@ fn test_hash_store() {
     let padded_data1 = pad_to_chunk_size(&data1, chunk_size);
     let padded_data2 = pad_to_chunk_size(&data2, chunk_size);
 
-    let content1 = FileContent::from_bytes(&padded_data1, chunk_size);
-    let content2 = FileContent::from_bytes(&padded_data2, chunk_size);
+    let content1 = Blob::from_bytes(&padded_data1, chunk_size);
+    let content2 = Blob::from_bytes(&padded_data2, chunk_size);
 
     let mut hash_store = HashStore::default();
 
@@ -101,6 +102,6 @@ fn test_hash_store() {
 
     // Verify all chunks from both contents are in the store
     for chunk in content1.chunks.iter().chain(content2.chunks.iter()) {
-        assert!(hash_store.chunks.contains(chunk));
+        assert!(hash_store.contains(chunk));
     }
 }
