@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 
 #[async_trait::async_trait]
 pub trait Storage {
-    async fn has(&self, hash: &[u8]) -> anyhow::Result<bool>;
+    async fn has(&self, key: &[u8]) -> anyhow::Result<bool>;
     async fn put(&self, key: &[u8], value: &[u8]) -> anyhow::Result<()>;
     async fn get(&self, key: &[u8]) -> anyhow::Result<Vec<u8>>;
     async fn remove(&self, key: &[u8]) -> anyhow::Result<()>;
