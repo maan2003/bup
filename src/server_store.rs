@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::hash_value::HashValue;
-
 #[async_trait::async_trait]
 pub trait Storage {
     async fn has(&self, hash: &[u8]) -> anyhow::Result<bool>;
@@ -28,11 +26,7 @@ impl Storage for InMemoryStorage {
     }
 
     async fn put(&self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
-        self.data
-            .lock()
-            .unwrap()
-            .await
-            .insert(key.to_vec(), value.to_vec());
+        self.data.lock().await.insert(key.to_vec(), value.to_vec());
         Ok(())
     }
 
