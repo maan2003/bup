@@ -9,7 +9,6 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
-
 #[derive(Subcommand)]
 enum Commands {
     Backup {
@@ -24,6 +23,7 @@ enum Commands {
         #[arg(short, long)]
         file: PathBuf,
     },
+    PartialVerify {},
 }
 
 #[tokio::main]
@@ -46,9 +46,16 @@ pub async fn main() -> anyhow::Result<()> {
         Commands::CheckChanged { file } => {
             let is_valid = bup::check_changed(config, file).await?;
             if is_valid {
-                println!("Verification successful: backup is valid.");
+                println!("backup is up to date.");
             } else {
-                println!("Verification failed: backup is invalid.");
+                println!("backup is stale.");
+            }
+        }
+        Commands::PartialVerify {} => {
+            if bup::partial_verify(config).await? {
+                println!("Partial verification passed.");
+            } else {
+                println!("Partial verification failed.");
             }
         }
     }

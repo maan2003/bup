@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use blober::BlobChunk;
+use rand::seq::SliceRandom;
 pub use storage::Storage;
 
 pub mod blober;
@@ -66,4 +68,24 @@ pub async fn check_changed<S: Storage>(
     let blob: blober::Blob = bincode::decode_from_slice(&blob_data, bincode::config::standard())?.0;
 
     Ok(blob.verify(&file_contents))
+}
+
+pub async fn partial_verify<S: Storage>(config: BackupConfig<S>) -> anyhow::Result<bool> {
+    let blob_data = config.storage.get(&config.key_for_root).await?;
+    let blob: blober::Blob = bincode::decode_from_slice(&blob_data, bincode::config::standard())?.0;
+
+    let mut rng = rand::thread_rng();
+    let chunks_to_check: Box<dyn Iterator<Item = &BlobChunk>> = if blob.chunks.len() < 10 {
+        Box::new(blob.chunks.iter())
+    } else {
+        Box::new(blob.chunks.choose_multiple(&mut rng, 10))
+    };
+    for chunk in chunks_to_check {
+        let chunk_data = config.storage.get(chunk.hash.0.as_bytes()).await?;
+        if !chunk.verify(&chunk_data) {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
