@@ -15,13 +15,6 @@ pub struct InMemoryStorage {
     data: Arc<Mutex<HashMap<Vec<u8>, Vec<u8>>>>,
 }
 
-impl InMemoryStorage {
-    pub fn new() -> Self {
-        InMemoryStorage {
-            data: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-}
 impl Storage for InMemoryStorage {
     async fn has(&self, hash: &[u8]) -> anyhow::Result<bool> {
         Ok(self.data.lock().await.contains_key(hash))
