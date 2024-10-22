@@ -7,6 +7,7 @@ pub trait Storage {
     async fn has(&self, hash: &[u8]) -> anyhow::Result<bool>;
     async fn put(&self, key: &[u8], value: &[u8]) -> anyhow::Result<()>;
     async fn get(&self, key: &[u8]) -> anyhow::Result<Vec<u8>>;
+    async fn remove(&self, key: &[u8]) -> anyhow::Result<()>;
 }
 pub struct InMemoryStorage {
     data: Arc<Mutex<HashMap<Vec<u8>, Vec<u8>>>>,
@@ -37,5 +38,10 @@ impl Storage for InMemoryStorage {
             .get(key)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Key not found"))
+    }
+
+    async fn remove(&self, key: &[u8]) -> anyhow::Result<()> {
+        self.data.lock().await.remove(key);
+        Ok(())
     }
 }
