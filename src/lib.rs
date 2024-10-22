@@ -147,4 +147,34 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_update_backup() -> anyhow::Result<()> {
+        let initial_content = b"Initial content".repeat(1024 * 1024);
+        let temp_file = create_temp_file(&initial_content).await?;
+        let storage = InMemoryStorage::default();
+        let config = BackupConfig {
+            key_for_root: b"root".to_vec(),
+            storage: storage.clone(),
+        };
+
+        // Initial backup
+        backup(config.clone(), temp_file.path()).await?;
+
+        // Modify file
+        let updated_content = b"Updated content".repeat(1024 * 1024);
+        tokio::fs::write(temp_file.path(), &updated_content).await?;
+
+        // Update backup
+        backup(config.clone(), temp_file.path()).await?;
+
+        // Restore and verify updated content
+        let output_file = NamedTempFile::new()?;
+        restore(config, output_file.path()).await?;
+
+        let restored_content = tokio::fs::read(output_file.path()).await?;
+        assert_eq!(updated_content.to_vec(), restored_content);
+
+        Ok(())
+    }
 }
