@@ -1,6 +1,8 @@
-use std::{cmp::Ordering, collections::BTreeSet};
+use bincode::{Decode, Encode};
+use std::collections::BTreeSet;
 
 mod file_chunk_impl;
+
 #[cfg(test)]
 mod tests;
 
