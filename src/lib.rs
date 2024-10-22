@@ -8,6 +8,7 @@ pub mod blober;
 pub mod hash_value;
 pub mod storage;
 
+#[derive(Clone)]
 pub struct BackupConfig<S: Storage> {
     key_for_root: Vec<u8>,
     storage: S,
@@ -67,7 +68,7 @@ pub async fn check_changed<S: Storage>(
     let blob_data = config.storage.get(&config.key_for_root).await?;
     let blob: blober::Blob = bincode::decode_from_slice(&blob_data, bincode::config::standard())?.0;
 
-    Ok(blob.verify(&file_contents))
+    Ok(!blob.verify(&file_contents))
 }
 
 pub async fn partial_verify<S: Storage>(config: BackupConfig<S>) -> anyhow::Result<bool> {
@@ -88,4 +89,62 @@ pub async fn partial_verify<S: Storage>(config: BackupConfig<S>) -> anyhow::Resu
     }
 
     Ok(true)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use storage::InMemoryStorage;
+    use tempfile::NamedTempFile;
+
+    async fn create_temp_file(content: &[u8]) -> anyhow::Result<NamedTempFile> {
+        let mut temp_file = NamedTempFile::new()?;
+        temp_file.write_all(content)?;
+        temp_file.flush()?;
+        Ok(temp_file)
+    }
+
+    #[tokio::test]
+    async fn test_backup_and_restore() -> anyhow::Result<()> {
+        let content = b"Hello, World!".repeat(1024 * 1024);
+        let temp_file = create_temp_file(&content).await?;
+        let storage = InMemoryStorage::default();
+        let config = BackupConfig {
+            key_for_root: b"root".to_vec(),
+            storage: storage.clone(),
+        };
+
+        backup(config.clone(), temp_file.path()).await?;
+
+        let output_file = NamedTempFile::new()?;
+        restore(config, output_file.path()).await?;
+
+        let restored_content = tokio::fs::read(output_file.path()).await?;
+        assert_eq!(content.to_vec(), restored_content);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_check_changed() -> anyhow::Result<()> {
+        let content = b"Original content".repeat(1024 * 1024);
+        let temp_file = create_temp_file(&content).await?;
+        let storage = InMemoryStorage::default();
+        let config = BackupConfig {
+            key_for_root: b"root".to_vec(),
+            storage: storage.clone(),
+        };
+
+        backup(config.clone(), temp_file.path()).await?;
+
+        // Check unchanged file
+        assert!(!check_changed(config.clone(), temp_file.path()).await?);
+
+        // Modify file and check again
+        let modified_content = b"Modified content".repeat(1024 * 1024);
+        tokio::fs::write(temp_file.path(), &modified_content).await?;
+        assert!(check_changed(config, temp_file.path()).await?);
+
+        Ok(())
+    }
 }

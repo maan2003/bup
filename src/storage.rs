@@ -9,6 +9,8 @@ pub trait Storage {
     async fn get(&self, key: &[u8]) -> anyhow::Result<Vec<u8>>;
     async fn remove(&self, key: &[u8]) -> anyhow::Result<()>;
 }
+
+#[derive(Default, Clone)]
 pub struct InMemoryStorage {
     data: Arc<Mutex<HashMap<Vec<u8>, Vec<u8>>>>,
 }
