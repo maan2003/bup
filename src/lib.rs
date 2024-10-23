@@ -1,30 +1,52 @@
 use std::path::Path;
 
+use bincode::{Decode, Encode};
 use blober::BlobChunk;
+use object_store::ObjectStore;
 use rand::seq::SliceRandom;
-pub use storage::Storage;
 
 pub mod blober;
 pub mod hash_value;
-pub mod storage;
 
-#[derive(Clone)]
-pub struct BackupConfig<S: Storage> {
-    key_for_root: Vec<u8>,
-    storage: S,
-}
-
+// TODO: configurable chunk size
+// tradeoff between fine grain updates and number of objects in the object store
 pub const CHUNK_SIZE: usize = 1024 * 1024;
 
-pub async fn backup<S: Storage>(config: BackupConfig<S>, file: &Path) -> anyhow::Result<()> {
+// ASSUMPTION: max backup size = 100GB = 102400 chunks
+
+// TODO: versioning
+#[derive(Encode, Clone, Decode)]
+pub struct Blob {
+    pub chunks: Vec<BlobChunk>,
+}
+
+// is it better to use multiple backup processes to backup multiple files
+// TODO: is there a better way to figure out if the blob is changed than to just hashing all the blobs
+// does lvm have a way of tracking if a blob got changed since last snapshot
+// we need a pointer equal
+// looks like there is thin_delta tool
+// we can verify the thin delta by just doing
+
+// TODO: parallelize
+// TODO: what is good level of parallelization for requests
+// TODO: figure out a good way to control the back pressure for hashing
+
+// FIXME: figure out when to remove blobs from the server
+// we might need to track the blobs available on the server (locally)
+// we could also use the list endpoint
+pub async fn backup<S: ObjectStore>(storage: S, file: &Path) -> anyhow::Result<()> {
+    // FIXME: mmap
+    // TODO: io uring might be better than mmap to avoid page faults hurting performance of hashing threads
+    // probably makes sense to hash and network at same time
     let file_contents = tokio::fs::read(&file).await?;
     let blob = blober::Blob::from_bytes(&file_contents, CHUNK_SIZE);
 
     // Store each chunk
     let mut offset = 0;
+
     for chunk in &blob.chunks {
         let chunk_hash = chunk.hash.0.as_bytes();
-        if !config.storage.has(chunk_hash).await? {
+        if !storage.has(chunk_hash).await? {
             let chunk_data = &file_contents[offset..(offset + CHUNK_SIZE)];
             config.storage.put(chunk_hash, chunk_data).await?;
         }
