@@ -19,10 +19,6 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
     },
-    CheckChanged {
-        #[arg(short, long)]
-        file: PathBuf,
-    },
     PartialVerify {},
 }
 
@@ -42,14 +38,6 @@ pub async fn main() -> anyhow::Result<()> {
         Commands::Restore { output } => {
             bup::restore(config, output).await?;
             println!("Restore completed successfully.");
-        }
-        Commands::CheckChanged { file } => {
-            let is_valid = bup::check_changed(config, file).await?;
-            if is_valid {
-                println!("backup is up to date.");
-            } else {
-                println!("backup is stale.");
-            }
         }
         Commands::PartialVerify {} => {
             if bup::partial_verify(config).await? {

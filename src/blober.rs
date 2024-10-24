@@ -11,7 +11,7 @@ pub struct BlobChunk {
 
 impl BlobChunk {
     pub fn from_bytes(data: &[u8]) -> BlobChunk {
-        let hash = blake3::hash(chunk);
+        let hash = blake3::hash(data);
         BlobChunk {
             hash: HashValue(hash),
         }

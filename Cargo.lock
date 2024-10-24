@@ -207,6 +207,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "blake3",
+ "bytes",
  "clap",
  "hex",
  "memmap2",
