@@ -1,7 +1,7 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
-use bup::storage::InMemoryStorage;
 use clap::{Parser, Subcommand};
+use object_store::memory::InMemory;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -19,7 +19,6 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
     },
-    PartialVerify {},
 }
 
 #[tokio::main]
@@ -27,24 +26,15 @@ enum Commands {
 pub async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // TODO: Initialize storage and config here
-    let config: bup::BackupConfig<InMemoryStorage> = todo!();
-
+    let storage = InMemory::new();
     match &cli.command {
         Commands::Backup { file } => {
-            bup::backup(config, file).await?;
+            bup::backup(Arc::new(storage), file, "root".into()).await?;
             println!("Backup completed successfully.");
         }
         Commands::Restore { output } => {
-            bup::restore(config, output).await?;
+            bup::restore(Arc::new(storage), output, "root".into()).await?;
             println!("Restore completed successfully.");
-        }
-        Commands::PartialVerify {} => {
-            if bup::partial_verify(config).await? {
-                println!("Partial verification passed.");
-            } else {
-                println!("Partial verification failed.");
-            }
         }
     }
 

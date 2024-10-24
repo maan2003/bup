@@ -1,19 +1,21 @@
+use bincode::{Decode, Encode};
+use hash_value::HashValue;
+use object_store::ObjectStore;
 use std::path::Path;
 use std::sync::Arc;
-
-use bincode::{Decode, Encode};
-use blober::BlobChunk;
-use bytes::Bytes;
-use object_store::{path::Path as ObjectStorePath, ObjectStore};
+use tokio::sync::mpsc;
+use tracing::info;
 
 pub mod blober;
 pub mod hash_value;
+
+type ObjectStorePath = object_store::path::Path;
 
 pub const CHUNK_SIZE: usize = 1024 * 1024;
 
 #[derive(Encode, Clone, Decode)]
 pub struct Blob {
-    pub chunks: Vec<BlobChunk>,
+    pub chunk_hashes: Vec<HashValue>,
 }
 
 // is it better to use multiple backup processes to backup multiple files
@@ -30,39 +32,84 @@ pub struct Blob {
 // FIXME: figure out when to remove blobs from the server
 // we might need to track the blobs available on the server (locally)
 // we could also use the list endpoint
+
+#[derive(Debug, Clone)]
+struct Block {
+    offset: u64,
+    data: Vec<u8>,
+}
+
+// Struct to represent a hashed block ready for upload
+struct HashedBlock {
+    hash: blake3::Hash,
+    offset: u64,
+    data: Vec<u8>,
+}
+
+fn object_path(key: &[u8]) -> ObjectStorePath {
+    ObjectStorePath::from(hex::encode(key))
+}
+
 pub async fn backup<S: ObjectStore>(
     storage: Arc<S>,
     file: &Path,
-    root_key: &str,
+    root_key: ObjectStorePath,
 ) -> anyhow::Result<()> {
-    // FIXME: mmap
-    // TODO: io uring might be better than mmap to avoid page faults hurting performance of hashing threads
-    // probably makes sense to hash and network at same time
-    let file_contents = tokio::fs::read(&file).await?;
-    // FIXME: implement this
-    let blob = Blob::from_bytes(&file_contents, CHUNK_SIZE);
+    // Channel sizes - adjust based on testing
+    const BLOCK_CHANNEL_SIZE: usize = 100;
+    const HASH_CHANNEL_SIZE: usize = 100;
 
-    // Store each chunk
-    let mut offset = 0;
-    for chunk in &blob.chunks {
-        let chunk_path = ObjectStorePath::from(hex::encode(chunk.hash.0.as_bytes()));
+    // Create channels
+    let (block_tx, mut block_rx) = mpsc::channel::<Block>(BLOCK_CHANNEL_SIZE);
+    let (hash_tx, mut hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
 
-        // Check if chunk exists using head()
-        if storage.head(&chunk_path).await.is_err() {
-            let chunk_data = &file_contents[offset..(offset + CHUNK_SIZE)];
-            storage
-                .put(&chunk_path, Bytes::copy_from_slice(chunk_data).into())
-                .await?;
+    let block_reader = tokio::spawn(async move {
+        // TODO: Implement thin_delta integration to get changed blocks
+        // For now, reading all blocks
+        // and send it to block_tx
+    });
+
+    let hash_task = tokio::task::spawn(async move {
+        while let Some(block) = block_rx.recv().await {
+            let hash_tx = hash_tx.clone();
+            rayon::spawn_fifo(move || {
+                let hash = blake3::hash(&block.data);
+                hash_tx.blocking_send((hash, block)).unwrap();
+            });
         }
-        offset += CHUNK_SIZE;
-    }
+        Ok::<_, anyhow::Error>(())
+    });
 
-    // Store the blob metadata
-    let blob_data = bincode::encode_to_vec(&blob, bincode::config::standard())?;
-    let root_path = ObjectStorePath::from(root_key);
-    storage
-        .put(&root_path, Bytes::from(blob_data).into())
-        .await?;
+    let upload_task = tokio::spawn(async move {
+        // FIXME: actually adjust the current blocks
+        let mut chunks = Vec::new();
+
+        while let Some((hash, block)) = hash_rx.recv().await {
+            // FIXME: concurrency
+
+            let object_path = object_path(hash.as_bytes());
+            match storage.head(&object_path).await {
+                Ok(_) => {
+                    info!("object_store already has existing block content");
+                }
+                Err(object_store::Error::NotFound { .. }) | Err(_) => {
+                    info!("object_store uploading the block content");
+                    storage.put(&object_path, block.data.into()).await?;
+                }
+            }
+        }
+
+        // Create and store blob metadata
+        let blob = blober::Blob { chunks };
+        let blob_data = bincode::encode_to_vec(&blob, bincode::config::standard())?;
+        storage.put(&root_key, blob_data.into()).await?;
+
+        Ok::<_, anyhow::Error>(())
+    });
+
+    // Wait for all tasks to complete
+    let (block_result, hash_result, upload_result) =
+        tokio::try_join!(block_reader, hash_task, upload_task)?;
 
     Ok(())
 }
@@ -70,9 +117,8 @@ pub async fn backup<S: ObjectStore>(
 pub async fn restore<S: ObjectStore>(
     storage: Arc<S>,
     output_path: &Path,
-    root_key: &str,
+    root_path: ObjectStorePath,
 ) -> anyhow::Result<()> {
-    let root_path = ObjectStorePath::from(root_key);
     let get_result = storage.get(&root_path).await?;
     let blob_data = get_result.bytes().await?;
     let blob: blober::Blob = bincode::decode_from_slice(&blob_data, bincode::config::standard())?.0;
@@ -116,10 +162,10 @@ mod tests {
         let storage = Arc::new(InMemory::new());
         let root_key = "root";
 
-        backup(storage.clone(), temp_file.path(), root_key).await?;
+        backup(storage.clone(), temp_file.path(), root_key.into()).await?;
 
         let output_file = NamedTempFile::new()?;
-        restore(storage, output_file.path(), root_key).await?;
+        restore(storage, output_file.path(), root_key.into()).await?;
 
         let restored_content = tokio::fs::read(output_file.path()).await?;
         assert_eq!(content.to_vec(), restored_content);
@@ -135,18 +181,18 @@ mod tests {
         let root_key = "root";
 
         // Initial backup
-        backup(storage.clone(), temp_file.path(), root_key).await?;
+        backup(storage.clone(), temp_file.path(), root_key.into()).await?;
 
         // Modify file
         let updated_content = b"Updated content".repeat(1024 * 1024);
         tokio::fs::write(temp_file.path(), &updated_content).await?;
 
         // Update backup
-        backup(storage.clone(), temp_file.path(), root_key).await?;
+        backup(storage.clone(), temp_file.path(), root_key.into()).await?;
 
         // Restore and verify updated content
         let output_file = NamedTempFile::new()?;
-        restore(storage, output_file.path(), root_key).await?;
+        restore(storage, output_file.path(), root_key.into()).await?;
 
         let restored_content = tokio::fs::read(output_file.path()).await?;
         assert_eq!(updated_content.to_vec(), restored_content);
