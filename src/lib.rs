@@ -131,7 +131,7 @@ pub async fn restore<S: ObjectStore>(
         let chunk_data = chunk_result.bytes().await?;
 
         if !chunk.verify(&chunk_data) {
-            anyhow::bail!("hash didn't match")
+            anyhow::bail!("hash didn't match, storage server error")
         }
         file_contents.extend_from_slice(&chunk_data);
     }
