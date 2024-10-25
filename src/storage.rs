@@ -36,13 +36,15 @@ impl Storage {
         Ok(bytes.to_vec())
     }
 
-    pub async fn get_root(&self) -> anyhow::Result<Vec<u8>> {
+    pub async fn get_root_metadata<T: bincode::Decode>(&self) -> anyhow::Result<T> {
         let bytes = self.store.get(&self.root_key).await?.bytes().await?;
-        Ok(bytes.to_vec())
+        let decoded = bincode::decode_from_slice(&bytes, bincode::config::standard())?.0;
+        Ok(decoded)
     }
 
-    pub async fn put_root(&self, data: Vec<u8>) -> anyhow::Result<()> {
-        self.store.put(&self.root_key, data.into()).await?;
+    pub async fn put_root_metadata<T: bincode::Encode>(&self, metadata: &T) -> anyhow::Result<()> {
+        let bytes = bincode::encode_to_vec(metadata, bincode::config::standard())?;
+        self.store.put(&self.root_key, bytes.into()).await?;
         Ok(())
     }
 }

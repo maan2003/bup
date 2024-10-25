@@ -8,11 +8,10 @@ use std::io::{ErrorKind, Read};
 use std::path::Path;
 use storage::Storage;
 use tokio::sync::mpsc;
-use tracing::info;
 
 pub const CHUNK_SIZE: usize = 1024 * 1024;
 
-#[derive(Encode, Clone, Decode)]
+#[derive(Encode, Clone, Decode, Debug)]
 pub struct Blob {
     pub chunk_hashes: Vec<HashValue>,
 }
@@ -34,7 +33,7 @@ pub struct Blob {
 
 #[derive(Debug, Clone)]
 struct Block {
-    idx: u64,
+    idx: usize,
     data: Vec<u8>,
 }
 
@@ -80,22 +79,21 @@ pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
         anyhow::Ok(())
     });
 
-    let storage_clone = storage;
+    let storage = storage.clone();
     let upload_task = tokio::spawn(async move {
-        // FIXME: actually adjust the current blocks
-        let chunk_hashes = Vec::new();
-
+        let mut blob: Blob = storage.get_root_metadata().await?;
         while let Some((hash, block)) = hash_rx.recv().await {
+            if blob.chunk_hashes.len() <= block.idx {
+                // *hopefully* block will replace all the placeholders, it is scary
+                blob.chunk_hashes.resize(block.idx + 1, HashValue(hash));
+            } else {
+                blob.chunk_hashes[block.idx] = HashValue(hash);
+            }
             // FIXME: concurrency
-            info!("uploading block");
-
-            storage_clone.put_block(&hash, block.data).await?;
+            storage.put_block(&hash, block.data).await?;
         }
 
-        // Create and store blob metadata
-        let blob = Blob { chunk_hashes };
-        let blob_data = bincode::encode_to_vec(&blob, bincode::config::standard())?;
-        storage_clone.put_root(blob_data).await?;
+        storage.put_root_metadata(&blob).await?;
 
         anyhow::Ok(())
     });
@@ -111,8 +109,7 @@ pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
 }
 
 pub async fn restore(storage: Storage, output_path: &Path) -> anyhow::Result<()> {
-    let blob_data = storage.get_root().await?;
-    let blob: Blob = bincode::decode_from_slice(&blob_data, bincode::config::standard())?.0;
+    let blob: Blob = storage.get_root_metadata().await?;
 
     let mut file_contents = Vec::new();
 
