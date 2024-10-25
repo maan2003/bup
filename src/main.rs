@@ -1,6 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
+use bup::storage::Storage;
 use clap::{Parser, Subcommand};
+use object_store::local::LocalFileSystem;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -27,17 +29,18 @@ enum Commands {
 pub async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let storage = object_store::local::LocalFileSystem::new_with_prefix(&cli.local_s3)?;
+    let storage = LocalFileSystem::new_with_prefix(&cli.local_s3)?;
+    let storage = Storage::new(Arc::new(storage), "root".into());
+
     match &cli.command {
         Commands::Backup { file } => {
-            bup::backup(Arc::new(storage), file, "root".into()).await?;
+            bup::backup(storage, file).await?;
             println!("Backup completed successfully.");
         }
         Commands::Restore { output } => {
-            bup::restore(Arc::new(storage), output, "root".into()).await?;
+            bup::restore(storage, output).await?;
             println!("Restore completed successfully.");
         }
     }
-
     Ok(())
 }

@@ -1,4 +1,4 @@
-use bincode::{BorrowDecode, Decode, Encode};
+use bincode::{impl_borrow_decode, Decode, Encode};
 use std::cmp::Ordering;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -25,16 +25,6 @@ impl Encode for HashValue {
     }
 }
 
-impl<'de> BorrowDecode<'de> for HashValue {
-    fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
-        decoder: &mut D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(HashValue {
-            0: blake3::Hash::from_bytes(<_>::decode(decoder)?),
-        })
-    }
-}
-
 impl Decode for HashValue {
     fn decode<D: bincode::de::Decoder>(
         decoder: &mut D,
@@ -44,3 +34,5 @@ impl Decode for HashValue {
         })
     }
 }
+
+impl_borrow_decode!(HashValue);
