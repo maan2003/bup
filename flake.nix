@@ -20,6 +20,8 @@
               bashInteractive
               cargo rustc rustfmt
               rust-analyzer
+              udev
+              pkg-config
             ] ++ lib.optionals (stdenv.isDarwin) [
               libiconv
             ];

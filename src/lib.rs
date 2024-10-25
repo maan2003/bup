@@ -1,10 +1,12 @@
 #![allow(dead_code)]
-pub mod blober;
 pub mod hash_value;
 
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use base64::Engine;
 use bincode::{Decode, Encode};
 use hash_value::HashValue;
 use object_store::ObjectStore;
+use std::io::{ErrorKind, Read};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -41,7 +43,7 @@ struct Block {
 }
 
 fn object_path(key: &[u8]) -> ObjectStorePath {
-    ObjectStorePath::from(hex::encode(key))
+    ObjectStorePath::from(BASE64_URL_SAFE_NO_PAD.encode(key))
 }
 
 #[allow(unused_variables)]
@@ -57,14 +59,34 @@ pub async fn backup<S: ObjectStore>(
     // Create channels
     let (block_tx, mut block_rx) = mpsc::channel::<Block>(BLOCK_CHANNEL_SIZE);
     let (hash_tx, mut hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
-
+    let file_path = file.to_owned();
     let block_reader = tokio::spawn(async move {
-        // TODO: Implement thin_delta integration to get changed blocks
-        // For now, reading all blocks
-        // and send it to block_tx
+        tokio::task::spawn_blocking(move || {
+            let mut file = std::fs::File::open(file_path)?;
+            let mut offset = 0;
+
+            loop {
+                let mut buffer = vec![0; CHUNK_SIZE];
+                match file.read_exact(&mut buffer) {
+                    Ok(()) => {
+                        let block = Block {
+                            offset,
+                            data: buffer,
+                        };
+                        block_tx.blocking_send(block)?;
+                        offset += CHUNK_SIZE as u64;
+                    }
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break anyhow::Ok(()),
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        })
+        .await??;
+
+        Ok::<(), anyhow::Error>(())
     });
 
-    let hash_task = tokio::task::spawn(async move {
+    let hash_task = tokio::spawn(async move {
         while let Some(block) = block_rx.recv().await {
             let hash_tx = hash_tx.clone();
             rayon::spawn_fifo(move || {
@@ -72,15 +94,16 @@ pub async fn backup<S: ObjectStore>(
                 hash_tx.blocking_send((hash, block)).unwrap();
             });
         }
-        Ok::<_, anyhow::Error>(())
+        anyhow::Ok(())
     });
 
     let upload_task = tokio::spawn(async move {
         // FIXME: actually adjust the current blocks
-        let chunks = Vec::new();
+        let chunk_hashes = Vec::new();
 
         while let Some((hash, block)) = hash_rx.recv().await {
             // FIXME: concurrency
+            info!("uploading block");
 
             let object_path = object_path(hash.as_bytes());
             match storage.head(&object_path).await {
@@ -95,11 +118,11 @@ pub async fn backup<S: ObjectStore>(
         }
 
         // Create and store blob metadata
-        let blob = blober::Blob { chunks };
+        let blob = Blob { chunk_hashes };
         let blob_data = bincode::encode_to_vec(&blob, bincode::config::standard())?;
         storage.put(&root_key, blob_data.into()).await?;
 
-        Ok::<_, anyhow::Error>(())
+        anyhow::Ok(())
     });
 
     // Wait for all tasks to complete
@@ -117,16 +140,16 @@ pub async fn restore<S: ObjectStore>(
 ) -> anyhow::Result<()> {
     let get_result = storage.get(&root_path).await?;
     let blob_data = get_result.bytes().await?;
-    let blob: blober::Blob = bincode::decode_from_slice(&blob_data, bincode::config::standard())?.0;
+    let blob: Blob = bincode::decode_from_slice(&blob_data, bincode::config::standard())?.0;
 
     let mut file_contents = Vec::new();
 
-    for chunk in &blob.chunks {
-        let chunk_path = ObjectStorePath::from(hex::encode(chunk.hash.0.as_bytes()));
+    for chunk_hash in &blob.chunk_hashes {
+        let chunk_path = object_path(chunk_hash.0.as_bytes());
         let chunk_result = storage.get(&chunk_path).await?;
         let chunk_data = chunk_result.bytes().await?;
 
-        if !chunk.verify(&chunk_data) {
+        if chunk_hash.0 != blake3::hash(&chunk_data) {
             anyhow::bail!("hash didn't match, storage server error")
         }
         file_contents.extend_from_slice(&chunk_data);

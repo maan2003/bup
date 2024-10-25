@@ -1,11 +1,12 @@
 use std::{path::PathBuf, sync::Arc};
 
 use clap::{Parser, Subcommand};
-use object_store::memory::InMemory;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
+    #[arg(short, long)]
+    local_s3: PathBuf,
     #[command(subcommand)]
     command: Commands,
 }
@@ -26,7 +27,7 @@ enum Commands {
 pub async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let storage = InMemory::new();
+    let storage = object_store::local::LocalFileSystem::new_with_prefix(&cli.local_s3)?;
     match &cli.command {
         Commands::Backup { file } => {
             bup::backup(Arc::new(storage), file, "root".into()).await?;

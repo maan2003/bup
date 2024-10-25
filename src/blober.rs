@@ -22,13 +22,6 @@ impl BlobChunk {
     }
 }
 
-// TODO: handle multiple versions
-// TODO(versioning): does the size of the blob change over time?
-#[derive(Decode, Encode)]
-pub struct Blob {
-    pub(crate) chunks: Vec<BlobChunk>,
-}
-
 #[derive(Decode, Encode, Default)]
 pub struct HashStore {
     pub(crate) chunks: BTreeSet<BlobChunk>,
