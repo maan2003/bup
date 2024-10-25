@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+pub mod blober;
+pub mod hash_value;
+
 use bincode::{Decode, Encode};
 use hash_value::HashValue;
 use object_store::ObjectStore;
@@ -5,9 +9,6 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::info;
-
-pub mod blober;
-pub mod hash_value;
 
 type ObjectStorePath = object_store::path::Path;
 
@@ -39,17 +40,11 @@ struct Block {
     data: Vec<u8>,
 }
 
-// Struct to represent a hashed block ready for upload
-struct HashedBlock {
-    hash: blake3::Hash,
-    offset: u64,
-    data: Vec<u8>,
-}
-
 fn object_path(key: &[u8]) -> ObjectStorePath {
     ObjectStorePath::from(hex::encode(key))
 }
 
+#[allow(unused_variables)]
 pub async fn backup<S: ObjectStore>(
     storage: Arc<S>,
     file: &Path,
@@ -82,7 +77,7 @@ pub async fn backup<S: ObjectStore>(
 
     let upload_task = tokio::spawn(async move {
         // FIXME: actually adjust the current blocks
-        let mut chunks = Vec::new();
+        let chunks = Vec::new();
 
         while let Some((hash, block)) = hash_rx.recv().await {
             // FIXME: concurrency
@@ -108,8 +103,9 @@ pub async fn backup<S: ObjectStore>(
     });
 
     // Wait for all tasks to complete
-    let (block_result, hash_result, upload_result) =
-        tokio::try_join!(block_reader, hash_task, upload_task)?;
+    let (_, hash_result, upload_result) = tokio::try_join!(block_reader, hash_task, upload_task)?;
+    hash_result?;
+    upload_result?;
 
     Ok(())
 }
