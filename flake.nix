@@ -33,7 +33,7 @@
       });
       packages = forAllSystems ({ system, pkgs, ... }: {
         default = pkgs.rustPlatform.buildRustPackage {
-            pname = "fync";
+            pname = "bup";
             version = "0.1.0";
             src = ./.;
             cargoLock = {

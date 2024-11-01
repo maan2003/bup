@@ -37,7 +37,7 @@ struct Block {
     data: Vec<u8>,
 }
 
-pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
+pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Result<()> {
     // Channel sizes - adjust based on testing
     const BLOCK_CHANNEL_SIZE: usize = 100;
     const HASH_CHANNEL_SIZE: usize = 100;
@@ -74,7 +74,13 @@ pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
 
     let storage = storage.clone();
     let upload_task = tokio::spawn(async move {
-        let mut blob: Blob = storage.get_root_metadata().await?;
+        let mut blob: Blob = if initial {
+            Blob {
+                chunk_hashes: vec![],
+            }
+        } else {
+            storage.get_root_metadata().await?
+        };
         while let Some((hash, block)) = hash_rx.recv().await {
             if blob.chunk_hashes.len() <= block.idx {
                 // *hopefully* block will replace all the placeholders, it is scary
