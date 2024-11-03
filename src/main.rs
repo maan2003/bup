@@ -32,6 +32,16 @@ enum Commands {
         #[arg(long)]
         initial: bool,
     },
+    BackupLvmThin {
+        #[arg(long)]
+        snapshot_file: PathBuf,
+        #[arg(long)]
+        snap_id1: u64,
+        #[arg(long)]
+        snap_id2: u64,
+        #[arg(long)]
+        meta_file: PathBuf,
+    },
     Restore {
         #[arg(long)]
         output: PathBuf,
@@ -67,6 +77,16 @@ pub async fn main() -> anyhow::Result<()> {
             info!("Starting backup of file: {}", file.display());
             bup::backup(storage, &file, initial).await?;
             info!("Backup completed");
+        }
+        Commands::BackupLvmThin {
+            snapshot_file,
+            snap_id1,
+            snap_id2,
+            meta_file,
+        } => {
+            info!("Starting LVM thin backup between snapshots {} and {}", snap_id1, snap_id2);
+            bup::backup_lvm_thin(storage, &snapshot_file, snap_id1, snap_id2, &meta_file).await?;
+            info!("LVM thin backup completed");
         }
         Commands::Restore { output } => {
             info!("Starting restore to: {}", output.display());

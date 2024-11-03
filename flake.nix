@@ -11,33 +11,27 @@
         lib = pkgs.lib;
       });
     in
-    {
-      devShells = forAllSystems ({ system, pkgs, ... }: {
-        default = with pkgs;
-          pkgs.mkShell {
-            name = "riff-shell";
-            buildInputs = [
-              bashInteractive
-              cargo rustc rustfmt
-              rust-analyzer
-              udev
-              pkg-config
-            ] ++ lib.optionals (stdenv.isDarwin) [
-              libiconv
-            ];
-
-            "RUST_SRC_PATH" = "${rustPlatform.rustLibSrc}";
-
-
-          };
-      });
+    rec {
+      devShells = packages;
       packages = forAllSystems ({ system, pkgs, ... }: {
         default = pkgs.rustPlatform.buildRustPackage {
             pname = "bup";
             version = "0.1.0";
             src = ./.;
+            buildInputs = [
+                pkgs.lvm2
+                pkgs.linuxHeaders
+                pkgs.udev
+            ];
+            nativeBuildInputs = [
+                pkgs.rustPlatform.bindgenHook
+                pkgs.pkg-config
+             ];
             cargoLock = {
                 lockFile = ./Cargo.lock;
+                outputHashes = {
+                    "thinp-1.1.0" = "sha256-kaTn3zqr7pS/Qum2/TsE1VTM/MeImrsatdYo4MP6AJE=";
+                };
             };
         };
       });
