@@ -3,6 +3,7 @@ pub mod hash_value;
 pub mod storage;
 
 use bincode::{Decode, Encode};
+use futures::executor::block_on;
 use hash_value::HashValue;
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
@@ -118,6 +119,7 @@ impl BlockDeltaVisitor {
         let hash_tx = self.block_hash_tx.clone();
 
         tokio::task::spawn_blocking(move || {
+            let hash_permit = block_on(hash_tx.reserve_owned()).unwrap();
             let mut buffer = vec![0; CHUNK_SIZE];
             if let Err(err) = snapshot_file.read_exact_at(&mut buffer, chunk_start) {
                 error!(%chunk_idx, %err, "failed to read chunk");
@@ -131,7 +133,7 @@ impl BlockDeltaVisitor {
 
             rayon::spawn_fifo(move || {
                 let hash = blake3::hash(&block.data);
-                hash_tx.blocking_send((hash, block)).unwrap();
+                hash_permit.send((hash, block));
             });
         });
 
@@ -165,15 +167,15 @@ pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Res
             let mut file = std::fs::File::open(file_path)?;
 
             for idx in 0.. {
+                let hash_permit = block_on(hash_tx.clone().reserve_owned()).unwrap();
                 let mut buffer = vec![0; CHUNK_SIZE];
                 match file.read_exact(&mut buffer) {
                     Ok(()) => {
                         let block = Block { idx, data: buffer };
-                        let hash_tx = hash_tx.clone();
                         // FIXME: add semaphore to control the memory used
                         rayon::spawn_fifo(move || {
                             let hash = blake3::hash(&block.data);
-                            hash_tx.blocking_send((hash, block)).unwrap();
+                            hash_permit.send((hash, block));
                         });
                     }
                     Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
