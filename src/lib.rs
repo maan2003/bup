@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinSet;
 use tracing::error;
 
-pub const CHUNK_SIZE: usize = 128 * 1024;
+pub const CHUNK_SIZE: usize = 512 * 1024;
 
 #[derive(Encode, Clone, Decode, Debug)]
 pub struct Blob {
@@ -155,23 +155,29 @@ impl BlockDeltaVisitor {
 
 impl DeltaVisitor for BlockDeltaVisitor {
     fn superblock_b(&mut self, sb: &ir::Superblock) -> anyhow::Result<Visit> {
-        self.data_block_size_bytes = Some(sb.data_block_size as u64 * 1024); // kb to b
+        self.data_block_size_bytes = Some(sb.data_block_size as u64 * 512); // sectors to b
         Ok(Visit::Continue)
     }
     fn delta(&mut self, d: &Delta) -> anyhow::Result<Visit> {
         match d {
-            Delta::LeftOnly(m) | Delta::RightOnly(m) => self.process_block(m.thin_begin)?,
-            Delta::Differ(m) => self.process_block(m.thin_begin)?,
+            Delta::LeftOnly(m) | Delta::RightOnly(m) => {
+                for i in 0..m.len {
+                    self.process_block(m.thin_begin + i)?
+                }
+            }
+            Delta::Differ(m) => {
+                for i in 0..m.len {
+                    self.process_block(m.thin_begin + i)?
+                }
+            }
             Delta::Same(_) => (),
         }
         Ok(Visit::Continue)
     }
 }
 
+const HASH_CHANNEL_SIZE: usize = 400;
 pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Result<()> {
-    const HASH_CHANNEL_SIZE: usize = 400;
-
-    // Create channels
     let (hash_tx, hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
     let file_path = file.to_owned();
     let block_reader = tokio::spawn(async move {
@@ -219,7 +225,6 @@ pub async fn backup_lvm_thin(
     snap_id2: u64,
     meta_file: &Path,
 ) -> anyhow::Result<()> {
-    const HASH_CHANNEL_SIZE: usize = 400;
     let (block_hash_tx, hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
 
     let snapshot_path = snapshot_file.to_owned();
