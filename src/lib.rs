@@ -9,16 +9,18 @@ use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
+use std::sync::Arc;
 use storage::Storage;
 use thinp::commands::engine::*;
 use thinp::commands::utils::mk_report;
 use thinp::thin::delta::{self, ThinDeltaOptions};
 use thinp::thin::delta_visitor::{Delta, DeltaVisitor, Snap};
 use thinp::thin::ir::{self, Visit};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
+use tokio::task::JoinSet;
 use tracing::error;
 
-pub const CHUNK_SIZE: usize = 1024 * 1024;
+pub const CHUNK_SIZE: usize = 128 * 1024;
 
 #[derive(Encode, Clone, Decode, Debug)]
 pub struct Blob {
@@ -64,14 +66,24 @@ impl BlockUploader {
         } else {
             self.storage.get_root_metadata().await?
         };
-
+        let mut join_set = JoinSet::new();
+        let semaphore = Arc::new(Semaphore::new(16));
         while let Some((hash, block)) = self.hash_rx.recv().await {
             if blob.chunk_hashes.len() <= block.idx {
                 blob.chunk_hashes.resize(block.idx + 1, HashValue(hash));
             } else {
                 blob.chunk_hashes[block.idx] = HashValue(hash);
             }
-            self.storage.put_block(&hash, block.data).await?;
+            let storage = self.storage.clone();
+            let permit = semaphore.clone().acquire_owned().await?;
+            join_set.spawn(async move {
+                let _permit = permit;
+                storage.put_block(&hash, block.data).await
+            });
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            result??;
         }
 
         self.storage.put_root_metadata(&blob).await?;
@@ -157,7 +169,7 @@ impl DeltaVisitor for BlockDeltaVisitor {
 }
 
 pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Result<()> {
-    const HASH_CHANNEL_SIZE: usize = 100;
+    const HASH_CHANNEL_SIZE: usize = 400;
 
     // Create channels
     let (hash_tx, hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
@@ -207,7 +219,7 @@ pub async fn backup_lvm_thin(
     snap_id2: u64,
     meta_file: &Path,
 ) -> anyhow::Result<()> {
-    const HASH_CHANNEL_SIZE: usize = 100;
+    const HASH_CHANNEL_SIZE: usize = 400;
     let (block_hash_tx, hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
 
     let snapshot_path = snapshot_file.to_owned();
@@ -249,7 +261,7 @@ pub async fn backup_lvm_thin(
 }
 
 pub async fn restore(storage: Storage, output_path: &Path) -> anyhow::Result<()> {
-    const CHANNEL_SIZE: usize = 100;
+    const CHANNEL_SIZE: usize = 400;
     let (chunk_tx, mut chunk_rx) = mpsc::channel(CHANNEL_SIZE);
 
     let storage_clone = storage.clone();
