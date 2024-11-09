@@ -1,6 +1,5 @@
 use crate::blob::Document;
 
-use super::Blob;
 use base64::{prelude::BASE64_URL_SAFE_NO_PAD, Engine};
 use object_store::{path::Path, ObjectStore};
 use std::{collections::HashSet, sync::Arc};

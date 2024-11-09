@@ -1,7 +1,7 @@
 use crate::hash_value::HashValue;
 use bincode::{Decode, Encode};
 
-#[derive(Encode, Clone, Decode, Debug, Default)]
+#[derive(Encode, Clone, Decode, Debug, Default, PartialEq)]
 pub struct Blob {
     pub chunk_hashes: Vec<HashValue>,
 }

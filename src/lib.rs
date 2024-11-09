@@ -3,7 +3,6 @@ pub mod blob;
 pub mod hash_value;
 pub mod storage;
 
-use bincode::{Decode, Encode};
 use futures::executor::block_on;
 use hash_value::HashValue;
 use std::io::{ErrorKind, Read, Write};
@@ -13,6 +12,7 @@ use storage::Storage;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinSet;
 
+// 512kb
 pub const CHUNK_SIZE: usize = 512 * 1024;
 
 use blob::{Blob, Document};
@@ -66,7 +66,7 @@ impl BlockUploader {
         }
 
         let doc = match doc {
-            Some(doc) => {
+            Some(mut doc) => {
                 doc.update(blob);
                 doc
             }
@@ -126,7 +126,8 @@ pub async fn restore(storage: Storage, output_path: &Path) -> anyhow::Result<()>
 
     let storage_clone = storage.clone();
     let fetch_task = tokio::spawn(async move {
-        let blob: Blob = storage.get_root_metadata().await?;
+        let doc: Document = storage.get_root_metadata().await?;
+        let blob: Blob = doc.current;
         for chunk_hash in &blob.chunk_hashes {
             let chunk_data = storage_clone.get_block(&chunk_hash.0).await?;
             if chunk_hash.0 != blake3::hash(&chunk_data) {
