@@ -25,14 +25,13 @@ use blob::{Blob, Document};
 // we might need to track the blobs available on the server (locally)
 // we could also use the list endpoint
 
-#[derive(Debug, Clone)]
-struct Chunk {
-    idx: usize,
-    data: Vec<u8>,
-}
-
 const HASH_CHANNEL_SIZE: usize = 400;
 pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
+    #[derive(Debug, Clone)]
+    struct Chunk {
+        idx: usize,
+        data: Vec<u8>,
+    }
     let (hash_tx, mut hash_rx) = mpsc::channel::<(blake3::Hash, Chunk)>(HASH_CHANNEL_SIZE);
     let file_path = file.to_owned();
     let chunk_reader = tokio::spawn(async move {

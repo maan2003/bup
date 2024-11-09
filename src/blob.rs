@@ -2,11 +2,9 @@ use crate::CHUNK_SIZE;
 use bincode::{Decode, Encode};
 use chrono::{DateTime, Utc};
 
-type HashBytes = [u8; 32];
-
 #[derive(Encode, Clone, Decode, Debug, PartialEq)]
 pub struct Blob {
-    chunk_hashes: Vec<HashBytes>,
+    chunk_hashes: Vec<[u8; 32]>,
     timestamp: i64,
 }
 
@@ -20,10 +18,8 @@ pub struct Document {
 // Stores differences between consecutive versions
 #[derive(Encode, Clone, Decode, Debug)]
 pub struct PrevBlob {
-    // Each number represents how many chunks to copy from next version before using a diff chunk
     same_chunks_lengths: Vec<usize>,
-    // Different chunks to insert between runs of same chunks
-    diff_chunks: Vec<HashBytes>,
+    diff_chunks: Vec<[u8; 32]>,
     timestamp: i64,
 }
 
