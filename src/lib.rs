@@ -27,60 +27,9 @@ struct Block {
     data: Vec<u8>,
 }
 
-struct BlockUploader {
-    storage: Storage,
-    hash_rx: mpsc::Receiver<(blake3::Hash, Block)>,
-}
-
-impl BlockUploader {
-    fn new(storage: Storage, hash_rx: mpsc::Receiver<(blake3::Hash, Block)>) -> Self {
-        Self { storage, hash_rx }
-    }
-
-    async fn upload(&mut self, initial: bool) -> anyhow::Result<()> {
-        let (mut blob, doc) = if !initial {
-            let doc = self.storage.get_root_metadata().await?;
-            (doc.current.clone(), Some(doc))
-        } else {
-            (Blob::default(), None)
-        };
-
-        let mut join_set = JoinSet::new();
-        let semaphore = Arc::new(Semaphore::new(16));
-        while let Some((hash, block)) = self.hash_rx.recv().await {
-            if blob.chunk_hashes.len() <= block.idx {
-                blob.chunk_hashes.resize(block.idx + 1, HashValue(hash));
-            } else {
-                blob.chunk_hashes[block.idx] = HashValue(hash);
-            }
-            let storage = self.storage.clone();
-            let permit = semaphore.clone().acquire_owned().await?;
-            join_set.spawn(async move {
-                let _permit = permit;
-                storage.put_block(&hash, block.data).await
-            });
-        }
-
-        while let Some(result) = join_set.join_next().await {
-            result??;
-        }
-
-        let doc = match doc {
-            Some(mut doc) => {
-                doc.update(blob);
-                doc
-            }
-            None => Document::new(blob),
-        };
-
-        self.storage.put_root_metadata(doc).await?;
-        Ok(())
-    }
-}
-
 const HASH_CHANNEL_SIZE: usize = 400;
 pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Result<()> {
-    let (hash_tx, hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
+    let (hash_tx, mut hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
     let file_path = file.to_owned();
     let block_reader = tokio::spawn(async move {
         tokio::task::spawn_blocking(move || {
@@ -109,8 +58,47 @@ pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Res
         Ok::<(), anyhow::Error>(())
     });
 
-    let mut uploader = BlockUploader::new(storage.clone(), hash_rx);
-    let upload_task = tokio::spawn(async move { uploader.upload(initial).await });
+    let storage_for_upload = storage.clone();
+    let upload_task = tokio::spawn(async move {
+        let (mut blob, doc) = if !initial {
+            let doc = storage_for_upload.get_root_metadata().await?;
+            (doc.current.clone(), Some(doc))
+        } else {
+            (Blob::default(), None)
+        };
+
+        let mut join_set = JoinSet::new();
+        let semaphore = Arc::new(Semaphore::new(16));
+
+        while let Some((hash, block)) = hash_rx.recv().await {
+            if blob.chunk_hashes.len() <= block.idx {
+                blob.chunk_hashes.resize(block.idx + 1, HashValue(hash));
+            } else {
+                blob.chunk_hashes[block.idx] = HashValue(hash);
+            }
+            let storage = storage_for_upload.clone();
+            let permit = semaphore.clone().acquire_owned().await?;
+            join_set.spawn(async move {
+                let _permit = permit;
+                storage.put_block(&hash, block.data).await
+            });
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            result??;
+        }
+
+        let doc = match doc {
+            Some(mut doc) => {
+                doc.update(blob);
+                doc
+            }
+            None => Document::new(blob),
+        };
+
+        storage_for_upload.put_root_metadata(doc).await?;
+        anyhow::Ok(())
+    });
 
     // Wait for all tasks to complete
     let (block_result, upload_result) = tokio::try_join!(block_reader, upload_task)?;

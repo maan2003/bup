@@ -10,7 +10,7 @@ pub struct Blob {
 #[derive(Encode, Clone, Decode, Debug)]
 pub struct Document {
     pub current: Blob,
-    pub history: Vec<PrevBlob>,
+    history: Vec<PrevBlob>,
 }
 
 impl Document {
@@ -26,11 +26,6 @@ impl Document {
         let prev_blob = PrevBlob::from_diff(&new_blob, &self.current);
         self.history.push(prev_blob);
         self.current = new_blob;
-
-        // Keep only last 10 versions
-        if self.history.len() > 10 {
-            self.history.remove(0);
-        }
     }
 
     pub fn get_version(&self, version: usize) -> anyhow::Result<Blob> {
@@ -54,7 +49,7 @@ impl Document {
 
 // Stores differences between consecutive versions
 #[derive(Encode, Clone, Decode, Debug)]
-pub struct PrevBlob {
+struct PrevBlob {
     // Each number represents how many chunks to copy from next version before using a diff chunk
     same_chunks_lengths: Vec<usize>,
     // Different chunks to insert between runs of same chunks

@@ -19,19 +19,13 @@
             version = "0.1.0";
             src = ./.;
             buildInputs = [
-                pkgs.lvm2
-                pkgs.linuxHeaders
                 pkgs.udev
             ];
             nativeBuildInputs = [
-                pkgs.rustPlatform.bindgenHook
                 pkgs.pkg-config
              ];
             cargoLock = {
                 lockFile = ./Cargo.lock;
-                outputHashes = {
-                    "thinp-1.1.0" = "sha256-kaTn3zqr7pS/Qum2/TsE1VTM/MeImrsatdYo4MP6AJE=";
-                };
             };
         };
       });
