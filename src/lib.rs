@@ -3,6 +3,9 @@ pub mod blob;
 pub mod hash_value;
 pub mod storage;
 
+#[cfg(test)]
+mod tests;
+
 use futures::executor::block_on;
 use std::io::{ErrorKind, Read, Write};
 use std::path::Path;

@@ -211,6 +211,7 @@ dependencies = [
  "clap",
  "futures",
  "object_store",
+ "rand",
  "rayon",
  "tempfile",
  "tokio",
