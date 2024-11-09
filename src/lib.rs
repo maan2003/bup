@@ -6,35 +6,16 @@ pub mod storage;
 use bincode::{Decode, Encode};
 use futures::executor::block_on;
 use hash_value::HashValue;
-use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
-use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
 use storage::Storage;
-use thinp::commands::engine::*;
-use thinp::commands::utils::mk_report;
-use thinp::thin::delta::{self, ThinDeltaOptions};
-use thinp::thin::delta_visitor::{Delta, DeltaVisitor, Snap};
-use thinp::thin::ir::{self, Visit};
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinSet;
-use tracing::error;
 
 pub const CHUNK_SIZE: usize = 512 * 1024;
 
 use blob::{Blob, Document};
-
-// is it better to use multiple backup processes to backup multiple files
-// TODO: is there a better way to figure out if the blob is changed than to just hashing all the blobs
-// does lvm have a way of tracking if a blob got changed since last snapshot
-// we need a pointer equal
-// looks like there is thin_delta tool
-// we can verify the thin delta by just doing
-
-// TODO: parallelize
-// TODO: what is good level of parallelization for requests
-// TODO: figure out a good way to control the back pressure for hashing
 
 // FIXME: figure out when to remove blobs from the server
 // we might need to track the blobs available on the server (locally)
@@ -97,91 +78,6 @@ impl BlockUploader {
     }
 }
 
-struct BlockDeltaVisitor {
-    block_hash_tx: mpsc::Sender<(blake3::Hash, Block)>,
-    snapshot_file: std::fs::File,
-    data_block_size_bytes: Option<u64>,
-    processed_queue: VecDeque<u64>,
-}
-
-impl BlockDeltaVisitor {
-    fn new(
-        block_hash_tx: mpsc::Sender<(blake3::Hash, Block)>,
-        snapshot_file: std::fs::File,
-    ) -> Self {
-        Self {
-            block_hash_tx,
-            snapshot_file,
-            data_block_size_bytes: None,
-            processed_queue: VecDeque::new(),
-        }
-    }
-
-    fn process_block(&mut self, thin_begin: u64) -> anyhow::Result<()> {
-        let data_block_size_bytes = self
-            .data_block_size_bytes
-            .expect("data_block_size must be set from superblock");
-        let offset = thin_begin * data_block_size_bytes;
-
-        let chunk_idx = offset / CHUNK_SIZE as u64;
-        let chunk_start = chunk_idx * CHUNK_SIZE as u64;
-
-        if self.processed_queue.contains(&chunk_idx) {
-            return Ok(());
-        }
-        self.processed_queue.push_back(chunk_idx);
-        if self.processed_queue.len() > 100 {
-            self.processed_queue.pop_front();
-        }
-        let snapshot_file = self.snapshot_file.try_clone()?;
-        let hash_tx = self.block_hash_tx.clone();
-
-        tokio::task::spawn_blocking(move || {
-            let hash_permit = block_on(hash_tx.reserve_owned()).unwrap();
-            let mut buffer = vec![0; CHUNK_SIZE];
-            if let Err(err) = snapshot_file.read_exact_at(&mut buffer, chunk_start) {
-                error!(%chunk_idx, %err, "failed to read chunk");
-                return;
-            }
-
-            let block = Block {
-                idx: chunk_idx.try_into().unwrap(),
-                data: buffer,
-            };
-
-            rayon::spawn_fifo(move || {
-                let hash = blake3::hash(&block.data);
-                hash_permit.send((hash, block));
-            });
-        });
-
-        Ok(())
-    }
-}
-
-impl DeltaVisitor for BlockDeltaVisitor {
-    fn superblock_b(&mut self, sb: &ir::Superblock) -> anyhow::Result<Visit> {
-        self.data_block_size_bytes = Some(sb.data_block_size as u64 * 512); // sectors to b
-        Ok(Visit::Continue)
-    }
-    fn delta(&mut self, d: &Delta) -> anyhow::Result<Visit> {
-        match d {
-            Delta::LeftOnly(m) | Delta::RightOnly(m) => {
-                for i in 0..m.len {
-                    self.process_block(m.thin_begin + i)?
-                }
-            }
-            Delta::Differ(m) => {
-                for i in 0..m.len {
-                    self.process_block(m.thin_begin + i)?
-                }
-            }
-            Delta::Same(_) => (),
-        }
-        Ok(Visit::Continue)
-    }
-}
-
 const HASH_CHANNEL_SIZE: usize = 400;
 pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Result<()> {
     let (hash_tx, hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
@@ -217,53 +113,6 @@ pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Res
     let upload_task = tokio::spawn(async move { uploader.upload(initial).await });
 
     // Wait for all tasks to complete
-    let (block_result, upload_result) = tokio::try_join!(block_reader, upload_task)?;
-    block_result?;
-    upload_result?;
-
-    Ok(())
-}
-
-pub async fn backup_lvm_thin(
-    storage: Storage,
-    snapshot_file: &Path,
-    snap_id1: u64,
-    snap_id2: u64,
-    meta_file: &Path,
-) -> anyhow::Result<()> {
-    let (block_hash_tx, hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
-
-    let snapshot_path = snapshot_file.to_owned();
-    let meta_path = meta_file.to_owned();
-    let block_reader = tokio::spawn(async move {
-        tokio::task::spawn_blocking(move || {
-            let snapshot_file = std::fs::File::open(snapshot_path)?;
-            let mut visitor = BlockDeltaVisitor::new(block_hash_tx, snapshot_file);
-
-            let engine_opts = EngineOptions {
-                tool: ToolType::Thin,
-                engine_type: EngineType::Sync,
-                use_metadata_snap: true,
-            };
-
-            let opts = ThinDeltaOptions {
-                input: &meta_path,
-                engine_opts,
-                report: mk_report(true),
-                snap1: Snap::DeviceId(snap_id1),
-                snap2: Snap::DeviceId(snap_id2),
-                verbose: false,
-            };
-            delta::delta_with_visitor(opts, &mut visitor)?;
-            anyhow::Ok(())
-        })
-        .await??;
-        Ok::<(), anyhow::Error>(())
-    });
-
-    let mut uploader = BlockUploader::new(storage.clone(), hash_rx);
-    let upload_task = tokio::spawn(async move { uploader.upload(false).await });
-
     let (block_result, upload_result) = tokio::try_join!(block_reader, upload_task)?;
     block_result?;
     upload_result?;
