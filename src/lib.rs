@@ -14,7 +14,7 @@ use std::sync::Arc;
 use storage::Storage;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{error, info};
 
 // 512kb
 pub const CHUNK_SIZE: usize = 512 * 1024;
@@ -152,5 +152,28 @@ pub async fn restore(storage: Storage, output_path: &Path) -> anyhow::Result<()>
     fetch_result?;
     write_result?;
 
+    Ok(())
+}
+
+pub async fn gc(storage: Storage) -> anyhow::Result<()> {
+    let (doc, available_hashes) =
+        tokio::try_join!(storage.get_root_metadata(), storage.available_hashes())?;
+    let doc = doc.context("root document is not present")?;
+    // mark all as deletable first
+    let mut hashes_to_delete = available_hashes
+        .into_iter()
+        .map(<[u8; 32]>::from)
+        .collect::<BTreeSet<_>>();
+    for hash in doc
+        .current()
+        .chunk_hashes()
+        .into_iter()
+        .chain(doc.versions().flat_map(|x| x.unique_chunk_hashes()))
+    {
+        if !hashes_to_delete.remove(hash.as_bytes()) {
+            error!("hash referenced by document is present: {}", hash);
+        }
+    }
+    storage.delete_chunks(hashes_to_delete).await?;
     Ok(())
 }

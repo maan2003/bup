@@ -149,4 +149,9 @@ impl PrevBlob {
     pub fn timestamp(&self) -> DateTime<Utc> {
         DateTime::from_timestamp(self.timestamp, 0).unwrap()
     }
+    pub fn unique_chunk_hashes(&self) -> impl Iterator<Item = blake3::Hash> + '_ {
+        self.diff_chunks
+            .iter()
+            .map(|x| blake3::Hash::from_bytes(*x))
+    }
 }

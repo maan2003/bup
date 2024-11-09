@@ -1,7 +1,7 @@
 use crate::blob::Document;
 
 use base64::{prelude::BASE64_URL_SAFE_NO_PAD, Engine};
-use futures::StreamExt;
+use futures::{stream, StreamExt};
 use object_store::{path::Path, ObjectStore};
 use std::sync::Arc;
 
@@ -45,6 +45,12 @@ impl Storage {
         Ok(bytes.to_vec())
     }
 
+    pub async fn delete_chunk(&self, hash: &blake3::Hash) -> anyhow::Result<()> {
+        let path = Self::chunk_path(hash.as_bytes());
+        self.store.delete(&path).await?;
+        Ok(())
+    }
+
     pub async fn get_root_metadata(&self) -> anyhow::Result<Option<Document>> {
         match self.store.get(&self.root_key).await {
             Ok(get_result) => {
@@ -77,5 +83,19 @@ impl Storage {
             }
         }
         Ok(hashes)
+    }
+    pub async fn delete_chunks<I: IntoIterator<Item = [u8; 32]>>(
+        &self,
+        hashes: I,
+    ) -> anyhow::Result<()>
+    where
+        I::IntoIter: Send,
+    {
+        let iter = hashes.into_iter().map(|h| Ok(Self::chunk_path(&h)));
+        let mut stream = self.store.delete_stream(Box::pin(stream::iter(iter)));
+        while let Some(result) = stream.next().await {
+            result?;
+        }
+        Ok(())
     }
 }
