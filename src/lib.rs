@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+pub mod blob;
 pub mod hash_value;
 pub mod storage;
 
@@ -22,10 +23,7 @@ use tracing::error;
 
 pub const CHUNK_SIZE: usize = 512 * 1024;
 
-#[derive(Encode, Clone, Decode, Debug)]
-pub struct Blob {
-    pub chunk_hashes: Vec<HashValue>,
-}
+use blob::{Blob, Document};
 
 // is it better to use multiple backup processes to backup multiple files
 // TODO: is there a better way to figure out if the blob is changed than to just hashing all the blobs
@@ -59,13 +57,13 @@ impl BlockUploader {
     }
 
     async fn upload(&mut self, initial: bool) -> anyhow::Result<()> {
-        let mut blob: Blob = if initial {
-            Blob {
-                chunk_hashes: vec![],
-            }
+        let (mut blob, doc) = if !initial {
+            let doc = self.storage.get_root_metadata().await?;
+            (doc.current.clone(), Some(doc))
         } else {
-            self.storage.get_root_metadata().await?
+            (Blob::default(), None)
         };
+
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(16));
         while let Some((hash, block)) = self.hash_rx.recv().await {
@@ -86,7 +84,15 @@ impl BlockUploader {
             result??;
         }
 
-        self.storage.put_root_metadata(&blob).await?;
+        let doc = match doc {
+            Some(doc) => {
+                doc.update(blob);
+                doc
+            }
+            None => Document::new(blob),
+        };
+
+        self.storage.put_root_metadata(doc).await?;
         Ok(())
     }
 }

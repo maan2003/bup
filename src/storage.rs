@@ -1,3 +1,5 @@
+use crate::blob::Document;
+
 use super::Blob;
 use base64::{prelude::BASE64_URL_SAFE_NO_PAD, Engine};
 use object_store::{path::Path, ObjectStore};
@@ -92,7 +94,7 @@ impl Storage {
         Ok(bytes.to_vec())
     }
 
-    pub async fn get_root_metadata(&self) -> anyhow::Result<Blob> {
+    pub async fn get_root_metadata(&self) -> anyhow::Result<Document> {
         let metadata = {
             let data = self.data.lock().unwrap();
             data.metadata.clone()
@@ -101,17 +103,18 @@ impl Storage {
             Ok(metadata)
         } else {
             let bytes = self.store.get(&self.root_key).await?.bytes().await?;
-            let decoded: Blob = bincode::decode_from_slice(&bytes, bincode::config::standard())?.0;
+            let decoded: Document =
+                bincode::decode_from_slice(&bytes, bincode::config::standard())?.0;
             self.data.lock().unwrap().metadata = Some(decoded.clone());
             self.save_local_data()?;
             Ok(decoded)
         }
     }
 
-    pub async fn put_root_metadata(&self, metadata: &Blob) -> anyhow::Result<()> {
-        let bytes = bincode::encode_to_vec(metadata, bincode::config::standard())?;
+    pub async fn put_root_metadata(&self, document: Document) -> anyhow::Result<()> {
+        let bytes = bincode::encode_to_vec(&document, bincode::config::standard())?;
         self.store.put(&self.root_key, bytes.into()).await?;
-        self.data.lock().unwrap().metadata = Some(metadata.clone());
+        self.data.lock().unwrap().metadata = Some(document);
         self.save_local_data()?;
         Ok(())
     }
@@ -120,5 +123,5 @@ impl Storage {
 #[derive(Clone, bincode::Encode, bincode::Decode)]
 struct LocalData {
     hashes_stored: HashSet<[u8; 32]>,
-    metadata: Option<Blob>,
+    metadata: Option<Document>,
 }
