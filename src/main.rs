@@ -20,8 +20,6 @@ struct BackendOpts {
 struct Cli {
     #[command(flatten)]
     backend: BackendOpts,
-    #[arg(long)]
-    local_data: PathBuf,
     #[command(subcommand)]
     command: Commands,
 }
@@ -50,14 +48,14 @@ pub async fn main() -> anyhow::Result<()> {
             s3: false,
         } => {
             let storage = LocalFileSystem::new_with_prefix(&path)?;
-            Storage::new(Arc::new(storage), "root", cli.local_data)?
+            Storage::new(Arc::new(storage), "root")?
         }
         BackendOpts {
             test_fs_backend: None,
             s3: true,
         } => {
             let storage = AmazonS3Builder::from_env().build()?;
-            Storage::new(Arc::new(storage), "root", cli.local_data)?
+            Storage::new(Arc::new(storage), "root")?
         }
         _ => unreachable!("Backend options are mutually exclusive"),
     };

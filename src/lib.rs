@@ -14,6 +14,7 @@ use std::sync::Arc;
 use storage::Storage;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinSet;
+use tracing::info;
 
 // 512kb
 pub const CHUNK_SIZE: usize = 512 * 1024;
@@ -25,16 +26,16 @@ use blob::{Blob, Document};
 // we could also use the list endpoint
 
 #[derive(Debug, Clone)]
-struct Block {
+struct Chunk {
     idx: usize,
     data: Vec<u8>,
 }
 
 const HASH_CHANNEL_SIZE: usize = 400;
 pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
-    let (hash_tx, mut hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
+    let (hash_tx, mut hash_rx) = mpsc::channel::<(blake3::Hash, Chunk)>(HASH_CHANNEL_SIZE);
     let file_path = file.to_owned();
-    let block_reader = tokio::spawn(async move {
+    let chunk_reader = tokio::spawn(async move {
         tokio::task::spawn_blocking(move || {
             let mut file = std::fs::File::open(file_path)?;
 
@@ -43,11 +44,10 @@ pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
                 let mut buffer = vec![0; CHUNK_SIZE];
                 match file.read_exact(&mut buffer) {
                     Ok(()) => {
-                        let block = Block { idx, data: buffer };
-                        // FIXME: add semaphore to control the memory used
+                        let chunk = Chunk { idx, data: buffer };
                         rayon::spawn_fifo(move || {
-                            let hash = blake3::hash(&block.data);
-                            hash_permit.send((hash, block));
+                            let hash = blake3::hash(&chunk.data);
+                            hash_permit.send((hash, chunk));
                         });
                     }
                     Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
@@ -76,14 +76,15 @@ pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(16));
 
-        while let Some((hash, block)) = hash_rx.recv().await {
-            new_blob.set(block.idx, hash);
+        while let Some((hash, chunk)) = hash_rx.recv().await {
+            new_blob.set(chunk.idx, hash);
             if hashes_sent.insert(hash.into()) {
                 let permit = semaphore.clone().acquire_owned().await?;
                 let storage = storage.clone();
                 join_set.spawn(async move {
                     let _permit = permit;
-                    storage.put_chunk(&hash, block.data).await
+                    info!(idx = chunk.idx, "Uploading chunk");
+                    storage.put_chunk(&hash, chunk.data).await
                 });
             }
         }
@@ -105,8 +106,8 @@ pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
     });
 
     // Wait for all tasks to complete
-    let (block_result, upload_result) = tokio::try_join!(block_reader, upload_task)?;
-    block_result?;
+    let (chunk_result, upload_result) = tokio::try_join!(chunk_reader, upload_task)?;
+    chunk_result?;
     upload_result?;
 
     Ok(())

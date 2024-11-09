@@ -9,22 +9,15 @@ use std::sync::Arc;
 pub struct Storage {
     store: Arc<dyn ObjectStore>,
     root_key: Path,
-    data_path: std::path::PathBuf,
 }
 
 const ROOT_KEY_PREFIX_BYTE: char = 'R';
 const CHUNK_KEY_PREFIX_BYTE: char = 'C';
 impl Storage {
-    pub fn new(
-        store: Arc<dyn ObjectStore>,
-        root_key: &str,
-        data_path: std::path::PathBuf,
-    ) -> anyhow::Result<Self> {
-        let root_key = Path::from(format!("{ROOT_KEY_PREFIX_BYTE}{root_key}"));
+    pub fn new(store: Arc<dyn ObjectStore>, root_key: &str) -> anyhow::Result<Self> {
         Ok(Self {
             store,
-            root_key,
-            data_path,
+            root_key: Path::from(format!("{ROOT_KEY_PREFIX_BYTE}{root_key}")),
         })
     }
 
@@ -37,7 +30,6 @@ impl Storage {
 
     pub async fn put_chunk(&self, hash: &blake3::Hash, data: Vec<u8>) -> anyhow::Result<()> {
         let path = Self::chunk_path(hash.as_bytes());
-        tracing::info!("Putting block {}", path);
         self.store.put(&path, data.into()).await?;
         Ok(())
     }
@@ -74,7 +66,8 @@ impl Storage {
 
     pub async fn available_hashes(&self) -> anyhow::Result<Vec<blake3::Hash>> {
         let mut hashes = Vec::new();
-        while let Some(meta) = self.store.list(None).next().await {
+        let mut list = self.store.list(None);
+        while let Some(meta) = list.next().await {
             let path: String = meta?.location.into();
             if path.starts_with(CHUNK_KEY_PREFIX_BYTE) {
                 let bytes = BASE64_URL_SAFE_NO_PAD.decode(&path[1..])?;

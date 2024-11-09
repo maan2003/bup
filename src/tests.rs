@@ -8,6 +8,7 @@ use std::{
     sync::Arc,
 };
 use tempfile::tempdir;
+use tracing::info;
 
 use crate::Storage;
 
@@ -15,6 +16,7 @@ const BUFFER_SIZE: usize = 64 * 1024;
 
 #[tokio::test]
 async fn test_backup_and_restore() -> anyhow::Result<()> {
+    tracing_subscriber::fmt().init();
     // Create temporary directories for test
     let backup_dir = tempdir()?;
     let data_dir = tempdir()?;
@@ -31,25 +33,29 @@ async fn test_backup_and_restore() -> anyhow::Result<()> {
     let storage = Storage::new(
         Arc::new(LocalFileSystem::new_with_prefix(backup_dir.path())?),
         "test-root",
-        data_dir.path().join("local-data"),
     )?;
 
     // Perform backup
     crate::backup(storage.clone(), &test_file_path).await?;
+    info!("backup complete");
 
     // Perform restore
     crate::restore(storage.clone(), &restore_file_path).await?;
+    info!("restore complete");
 
     assert_files_same(&test_file_path, &restore_file_path).await?;
+    info!("assert complete");
 
     // write 1M random data at 2M offset
     write_random_data(file.try_clone()?, 2 * 1024 * 1024, 1024 * 1024).await?;
 
     // Perform incremental backup
     crate::backup(storage.clone(), &test_file_path).await?;
+    info!("incr backup complete");
 
     // Perform restore
     crate::restore(storage.clone(), &restore_file_path).await?;
+    info!("restore complete");
     assert_files_same(&test_file_path, &restore_file_path).await?;
 
     Ok(())
