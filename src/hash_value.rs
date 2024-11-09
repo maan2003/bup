@@ -1,7 +1,7 @@
 use bincode::{impl_borrow_decode, Decode, Encode};
 use std::cmp::Ordering;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct HashValue(pub blake3::Hash);
 
 impl PartialOrd for HashValue {

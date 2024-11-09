@@ -1,9 +1,10 @@
 use crate::hash_value::HashValue;
 use bincode::{Decode, Encode};
 
-#[derive(Encode, Clone, Decode, Debug, Default, PartialEq)]
+#[derive(Encode, Clone, Decode, Debug, PartialEq)]
 pub struct Blob {
     chunk_hashes: Vec<HashValue>,
+    timestamp: i64,
 }
 
 // Used to store all version info for a backed up file
@@ -15,11 +16,12 @@ pub struct Document {
 
 // Stores differences between consecutive versions
 #[derive(Encode, Clone, Decode, Debug)]
-struct PrevBlob {
+pub struct PrevBlob {
     // Each number represents how many chunks to copy from next version before using a diff chunk
     same_chunks_lengths: Vec<usize>,
     // Different chunks to insert between runs of same chunks
     diff_chunks: Vec<HashValue>,
+    timestamp: i64,
 }
 
 impl Document {
@@ -60,6 +62,13 @@ impl Document {
 
 const FAKE_HASH: blake3::Hash = blake3::Hash::from_bytes([0; 32]);
 impl Blob {
+    pub fn empty() -> Self {
+        Self {
+            chunk_hashes: Vec::new(),
+            timestamp: chrono::Utc::now().timestamp(),
+        }
+    }
+
     pub fn set(&mut self, idx: usize, hash: blake3::Hash) {
         if self.chunk_hashes.len() <= idx {
             self.chunk_hashes.resize(idx + 1, HashValue(FAKE_HASH));
@@ -81,17 +90,15 @@ impl PrevBlob {
         let mut diff_chunks = Vec::new();
 
         let mut current_same_run = 0;
-        let mut i = 0;
 
-        while i < prev.chunk_hashes.len() {
+        for i in 0..prev.chunk_hashes.len() {
             if i < current.chunk_hashes.len() && current.chunk_hashes[i] == prev.chunk_hashes[i] {
                 current_same_run += 1;
             } else {
                 same_chunks_lengths.push(current_same_run);
                 current_same_run = 0;
-                diff_chunks.push(prev.chunk_hashes[i].clone());
+                diff_chunks.push(prev.chunk_hashes[i]);
             }
-            i += 1;
         }
 
         if current_same_run > 0 {
@@ -101,6 +108,7 @@ impl PrevBlob {
         let result = Self {
             same_chunks_lengths,
             diff_chunks,
+            timestamp: prev.timestamp,
         };
 
         // atmost 1 different
@@ -135,6 +143,7 @@ impl PrevBlob {
 
         Blob {
             chunk_hashes: chunks_hashes,
+            timestamp: self.timestamp,
         }
     }
 }

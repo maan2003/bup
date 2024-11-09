@@ -63,7 +63,7 @@ pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Res
             let doc = storage_for_upload.get_root_metadata().await?;
             (doc.current().clone(), Some(doc))
         } else {
-            (Blob::default(), None)
+            (Blob::empty(), None)
         };
 
         let mut join_set = JoinSet::new();

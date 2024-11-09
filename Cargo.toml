@@ -8,6 +8,7 @@ anyhow = { version = "1.0.90", features = ["backtrace"] }
 base64 = "0.22.1"
 bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 blake3 = "1.5.4"
+chrono = "0.4.38"
 clap = { version = "4.5.20", features = ["derive"] }
 futures = "0.3.31"
 object_store = { version = "0.11.1", features = ["aws"] }
