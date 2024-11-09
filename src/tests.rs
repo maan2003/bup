@@ -8,54 +8,119 @@ use std::{
     sync::Arc,
 };
 use tempfile::tempdir;
-use tracing::info;
 
-use crate::Storage;
+use crate::{blob::Document, gc, Storage};
 
 const BUFFER_SIZE: usize = 64 * 1024;
 
 #[tokio::test]
 async fn test_backup_and_restore() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().init();
-    // Create temporary directories for test
+    tracing_subscriber::fmt().with_test_writer().try_init().ok();
     let backup_dir = tempdir()?;
     let data_dir = tempdir()?;
 
-    // Create a random test file
     let test_file_path = data_dir.path().join("test_file.bin");
     let file = fs::File::create(&test_file_path)?;
     write_random_data(file.try_clone()?, 0, 1024 * 1024 * 10).await?; // 10MB
 
-    // Create output path for restore
     let restore_file_path = data_dir.path().join("restored_file.bin");
 
-    // Initialize storage with test filesystem backend
-    let storage = Storage::new(
-        Arc::new(LocalFileSystem::new_with_prefix(backup_dir.path())?),
-        "test-root",
-    )?;
-
-    // Perform backup
+    let storage = Storage::new(Arc::new(LocalFileSystem::new_with_prefix(
+        backup_dir.path(),
+    )?))?;
     crate::backup(storage.clone(), &test_file_path).await?;
-    info!("backup complete");
-
-    // Perform restore
     crate::restore(storage.clone(), &restore_file_path).await?;
-    info!("restore complete");
-
     assert_files_same(&test_file_path, &restore_file_path).await?;
-    info!("assert complete");
+    Ok(())
+}
 
-    // write 1M random data at 2M offset
-    write_random_data(file.try_clone()?, 2 * 1024 * 1024, 1024 * 1024).await?;
+#[tokio::test]
+async fn test_backup_with_gc() -> anyhow::Result<()> {
+    tracing_subscriber::fmt().with_test_writer().try_init().ok();
+    let backup_dir = tempdir()?;
+    let data_dir = tempdir()?;
 
-    // Perform incremental backup
+    let test_file_path = data_dir.path().join("test_file.bin");
+    let file = fs::File::create(&test_file_path)?;
+    write_random_data(file.try_clone()?, 0, 1024 * 1024 * 10).await?; // 10MB
+
+    let restore_file_path = data_dir.path().join("restored_file.bin");
+
+    let storage = Storage::new(Arc::new(LocalFileSystem::new_with_prefix(
+        backup_dir.path(),
+    )?))?;
+
     crate::backup(storage.clone(), &test_file_path).await?;
-    info!("incr backup complete");
 
-    // Perform restore
+    // delete first 8MB
+    write_random_data(file.try_clone()?, 0, 1024 * 1024 * 8).await?;
+    crate::backup(storage.clone(), &test_file_path).await?;
+    // remove first version for gc to work
+    let doc = storage.get_root_metadata().await?.unwrap();
+    storage
+        .put_root_metadata(Document::new(doc.current().clone()))
+        .await?;
+    gc(storage.clone()).await?;
+
     crate::restore(storage.clone(), &restore_file_path).await?;
-    info!("restore complete");
+    assert_files_same(&test_file_path, &restore_file_path).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_backup_increasing_size() -> anyhow::Result<()> {
+    tracing_subscriber::fmt().with_test_writer().try_init().ok();
+    let backup_dir = tempdir()?;
+    let data_dir = tempdir()?;
+
+    let test_file_path = data_dir.path().join("test_file.bin");
+    let file = fs::File::create(&test_file_path)?;
+    write_random_data(file.try_clone()?, 0, 1024 * 1024 * 10).await?; // 10MB
+
+    let restore_file_path = data_dir.path().join("restored_file.bin");
+
+    let storage = Storage::new(Arc::new(LocalFileSystem::new_with_prefix(
+        backup_dir.path(),
+    )?))?;
+
+    crate::backup(storage.clone(), &test_file_path).await?;
+
+    // Create larger file
+    let file = fs::File::create(&test_file_path)?;
+    write_random_data(file.try_clone()?, 0, 1024 * 1024 * 12).await?; // 12MB
+
+    crate::backup(storage.clone(), &test_file_path).await?;
+    crate::restore(storage.clone(), &restore_file_path).await?;
+    assert_files_same(&test_file_path, &restore_file_path).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_backup_decreasing_size() -> anyhow::Result<()> {
+    tracing_subscriber::fmt().with_test_writer().try_init().ok();
+    let backup_dir = tempdir()?;
+    let data_dir = tempdir()?;
+
+    let test_file_path = data_dir.path().join("test_file.bin");
+    let file = fs::File::create(&test_file_path)?;
+    write_random_data(file.try_clone()?, 0, 1024 * 1024 * 10).await?; // 10MB
+
+    let restore_file_path = data_dir.path().join("restored_file.bin");
+
+    let storage = Storage::new(Arc::new(LocalFileSystem::new_with_prefix(
+        backup_dir.path(),
+    )?))?;
+
+    crate::backup(storage.clone(), &test_file_path).await?;
+
+    // Create smaller file
+    let file = fs::File::create(&test_file_path)?;
+    write_random_data(file.try_clone()?, 0, 1024 * 1024 * 8).await?; // 8MB
+
+    crate::backup(storage.clone(), &test_file_path).await?;
+    crate::restore(storage.clone(), &restore_file_path).await?;
     assert_files_same(&test_file_path, &restore_file_path).await?;
 
     Ok(())

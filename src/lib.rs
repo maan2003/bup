@@ -21,10 +21,6 @@ pub const CHUNK_SIZE: usize = 512 * 1024;
 
 use blob::{Blob, Document};
 
-// FIXME: figure out when to remove blobs from the server
-// we might need to track the blobs available on the server (locally)
-// we could also use the list endpoint
-
 const HASH_CHANNEL_SIZE: usize = 400;
 pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
     #[derive(Debug, Clone)]
@@ -60,13 +56,10 @@ pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
         Ok::<(), anyhow::Error>(())
     });
 
-    let storage = storage.clone();
     let upload_task = tokio::spawn(async move {
         let (doc, available_hashes) =
             tokio::try_join!(storage.get_root_metadata(), storage.available_hashes())?;
-        let mut new_blob = doc
-            .as_ref()
-            .map_or_else(Blob::empty, |d| d.current().fork());
+        let mut new_blob = Blob::empty();
         let mut hashes_sent = available_hashes
             .into_iter()
             .map(<[u8; 32]>::from)
@@ -116,14 +109,13 @@ pub async fn restore(storage: Storage, output_path: &Path) -> anyhow::Result<()>
     const CHANNEL_SIZE: usize = 400;
     let (chunk_tx, mut chunk_rx) = mpsc::channel(CHANNEL_SIZE);
 
-    let storage_clone = storage.clone();
     let fetch_task = tokio::spawn(async move {
-        let doc: Document = storage
+        let doc = storage
             .get_root_metadata()
             .await?
-            .context("root metadata not found")?;
+            .context("root document not found")?;
         for chunk_hash in doc.current().chunk_hashes() {
-            let chunk_data = storage_clone.get_chunk(&chunk_hash).await?;
+            let chunk_data = storage.get_chunk(&chunk_hash).await?;
             if chunk_hash != blake3::hash(&chunk_data) {
                 anyhow::bail!("hash didn't match, storage server error");
             }
@@ -137,6 +129,7 @@ pub async fn restore(storage: Storage, output_path: &Path) -> anyhow::Result<()>
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
+            .truncate(true)
             .open(output_path)?;
 
         while let Some(chunk_data) = chunk_rx.blocking_recv() {
@@ -158,7 +151,7 @@ pub async fn restore(storage: Storage, output_path: &Path) -> anyhow::Result<()>
 pub async fn gc(storage: Storage) -> anyhow::Result<()> {
     let (doc, available_hashes) =
         tokio::try_join!(storage.get_root_metadata(), storage.available_hashes())?;
-    let doc = doc.context("root document is not present")?;
+    let doc = doc.context("root document not found")?;
     // mark all as deletable first
     let mut hashes_to_delete = available_hashes
         .into_iter()
@@ -174,6 +167,8 @@ pub async fn gc(storage: Storage) -> anyhow::Result<()> {
             error!("hash referenced by document is present: {}", hash);
         }
     }
+    let delete_count = hashes_to_delete.len();
     storage.delete_chunks(hashes_to_delete).await?;
+    info!("Deleted {delete_count} chunks");
     Ok(())
 }

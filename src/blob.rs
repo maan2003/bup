@@ -59,11 +59,6 @@ impl Blob {
     pub fn size(&self) -> u64 {
         self.chunk_hashes.len() as u64 * CHUNK_SIZE as u64
     }
-    pub fn fork(&self) -> Self {
-        let mut this = self.clone();
-        this.timestamp = chrono::Utc::now().timestamp();
-        this
-    }
     pub fn set(&mut self, idx: usize, hash: blake3::Hash) {
         if self.chunk_hashes.len() <= idx {
             self.chunk_hashes.resize(idx + 1, FAKE_HASH);

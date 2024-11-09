@@ -11,19 +11,19 @@ pub struct Storage {
     root_key: Path,
 }
 
-const ROOT_KEY_PREFIX_BYTE: char = 'R';
-const CHUNK_KEY_PREFIX_BYTE: char = 'C';
+const ROOT_KEY: &str = "Root";
+const CHUNK_KEY_PREFIX: char = 'C';
 impl Storage {
-    pub fn new(store: Arc<dyn ObjectStore>, root_key: &str) -> anyhow::Result<Self> {
+    pub fn new(store: Arc<dyn ObjectStore>) -> anyhow::Result<Self> {
         Ok(Self {
             store,
-            root_key: Path::from(format!("{ROOT_KEY_PREFIX_BYTE}{root_key}")),
+            root_key: Path::from(ROOT_KEY),
         })
     }
 
     fn chunk_path(key: &[u8]) -> Path {
-        let mut s = String::with_capacity(key.len() * 4 / 3 + 1);
-        s.push(CHUNK_KEY_PREFIX_BYTE);
+        let mut s = String::with_capacity(key.len() * 4 / 3 + 2);
+        s.push(CHUNK_KEY_PREFIX);
         BASE64_URL_SAFE_NO_PAD.encode_string(key, &mut s);
         Path::from(s)
     }
@@ -75,7 +75,7 @@ impl Storage {
         let mut list = self.store.list(None);
         while let Some(meta) = list.next().await {
             let path: String = meta?.location.into();
-            if path.starts_with(CHUNK_KEY_PREFIX_BYTE) {
+            if path.starts_with(CHUNK_KEY_PREFIX) {
                 let bytes = BASE64_URL_SAFE_NO_PAD.decode(&path[1..])?;
                 if let Ok(bytes) = bytes.try_into() {
                     hashes.push(blake3::Hash::from_bytes(bytes));

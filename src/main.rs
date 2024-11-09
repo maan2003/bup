@@ -48,14 +48,14 @@ pub async fn main() -> anyhow::Result<()> {
             s3: false,
         } => {
             let storage = LocalFileSystem::new_with_prefix(&path)?;
-            Storage::new(Arc::new(storage), "root")?
+            Storage::new(Arc::new(storage))?
         }
         BackendOpts {
             test_fs_backend: None,
             s3: true,
         } => {
             let storage = AmazonS3Builder::from_env().build()?;
-            Storage::new(Arc::new(storage), "root")?
+            Storage::new(Arc::new(storage))?
         }
         _ => unreachable!("Backend options are mutually exclusive"),
     };
