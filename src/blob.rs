@@ -1,9 +1,12 @@
-use crate::hash_value::HashValue;
+use crate::CHUNK_SIZE;
 use bincode::{Decode, Encode};
+use chrono::{DateTime, Utc};
+
+type HashBytes = [u8; 32];
 
 #[derive(Encode, Clone, Decode, Debug, PartialEq)]
 pub struct Blob {
-    chunk_hashes: Vec<HashValue>,
+    chunk_hashes: Vec<HashBytes>,
     timestamp: i64,
 }
 
@@ -20,7 +23,7 @@ pub struct PrevBlob {
     // Each number represents how many chunks to copy from next version before using a diff chunk
     same_chunks_lengths: Vec<usize>,
     // Different chunks to insert between runs of same chunks
-    diff_chunks: Vec<HashValue>,
+    diff_chunks: Vec<HashBytes>,
     timestamp: i64,
 }
 
@@ -41,26 +44,12 @@ impl Document {
         self.history.push(prev_blob);
         self.current = new_blob;
     }
-
-    pub fn get_version(&self, version: usize) -> Option<Blob> {
-        if version >= self.history.len() + 1 {
-            return None;
-        }
-
-        if version == self.history.len() {
-            return Some(self.current().clone());
-        }
-
-        // We need to reconstruct the version by applying diffs in reverse
-        let mut current = self.current.clone();
-        for prev_blob in self.history[version..].iter().rev() {
-            current = prev_blob.compute(&current);
-        }
-        Some(current)
+    pub fn versions(&self) -> impl Iterator<Item = &PrevBlob> + '_ {
+        self.history.iter().rev()
     }
 }
 
-const FAKE_HASH: blake3::Hash = blake3::Hash::from_bytes([0; 32]);
+const FAKE_HASH: [u8; 32] = [0; 32];
 impl Blob {
     pub fn empty() -> Self {
         Self {
@@ -68,24 +57,36 @@ impl Blob {
             timestamp: chrono::Utc::now().timestamp(),
         }
     }
-
+    pub fn timestamp(&self) -> DateTime<Utc> {
+        DateTime::from_timestamp(self.timestamp, 0).unwrap()
+    }
+    pub fn size(&self) -> u64 {
+        self.chunk_hashes.len() as u64 * CHUNK_SIZE as u64
+    }
+    pub fn fork(&self) -> Self {
+        let mut this = self.clone();
+        this.timestamp = chrono::Utc::now().timestamp();
+        this
+    }
     pub fn set(&mut self, idx: usize, hash: blake3::Hash) {
         if self.chunk_hashes.len() <= idx {
-            self.chunk_hashes.resize(idx + 1, HashValue(FAKE_HASH));
+            self.chunk_hashes.resize(idx + 1, FAKE_HASH);
         }
-        self.chunk_hashes[idx] = HashValue(hash);
+        self.chunk_hashes[idx] = hash.into();
     }
-    pub fn chunk_hashes(&self) -> &[HashValue] {
-        &self.chunk_hashes
+    pub fn chunk_hashes(&self) -> impl Iterator<Item = blake3::Hash> + '_ {
+        self.chunk_hashes
+            .iter()
+            .map(|x| blake3::Hash::from_bytes(*x))
     }
     pub fn verify_invariants(&self) {
-        assert!(self.chunk_hashes().iter().all(|x| x.0 != FAKE_HASH));
+        assert!(self.chunk_hashes.iter().all(|x| x != &FAKE_HASH));
     }
 }
 
 impl PrevBlob {
     // Create a diff between two versions
-    pub fn from_diff(current: &Blob, prev: &Blob) -> Self {
+    fn from_diff(current: &Blob, prev: &Blob) -> Self {
         let mut same_chunks_lengths = Vec::new();
         let mut diff_chunks = Vec::new();
 
@@ -123,7 +124,7 @@ impl PrevBlob {
     }
 
     // Reconstruct a full blob from a diff and next version
-    pub fn compute(&self, next_version: &Blob) -> Blob {
+    fn compute(&self, next_version: &Blob) -> Blob {
         let mut next_chunks = next_version.chunk_hashes.iter();
         let mut diff_chunks = self.diff_chunks.iter();
         let mut chunks_hashes = Vec::new();
@@ -145,5 +146,11 @@ impl PrevBlob {
             chunk_hashes: chunks_hashes,
             timestamp: self.timestamp,
         }
+    }
+    pub fn retained_size(&self) -> u64 {
+        self.diff_chunks.len() as u64 * CHUNK_SIZE as u64
+    }
+    pub fn timestamp(&self) -> DateTime<Utc> {
+        DateTime::from_timestamp(self.timestamp, 0).unwrap()
     }
 }

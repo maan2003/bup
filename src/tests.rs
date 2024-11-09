@@ -30,12 +30,12 @@ async fn test_backup_and_restore() -> anyhow::Result<()> {
     // Initialize storage with test filesystem backend
     let storage = Storage::new(
         Arc::new(LocalFileSystem::new_with_prefix(backup_dir.path())?),
-        "test-root".into(),
+        "test-root",
         data_dir.path().join("local-data"),
     )?;
 
     // Perform backup
-    crate::backup(storage.clone(), &test_file_path, true).await?;
+    crate::backup(storage.clone(), &test_file_path).await?;
 
     // Perform restore
     crate::restore(storage.clone(), &restore_file_path).await?;
@@ -46,7 +46,7 @@ async fn test_backup_and_restore() -> anyhow::Result<()> {
     write_random_data(file.try_clone()?, 2 * 1024 * 1024, 1024 * 1024).await?;
 
     // Perform incremental backup
-    crate::backup(storage.clone(), &test_file_path, false).await?;
+    crate::backup(storage.clone(), &test_file_path).await?;
 
     // Perform restore
     crate::restore(storage.clone(), &restore_file_path).await?;

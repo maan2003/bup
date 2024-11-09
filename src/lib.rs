@@ -1,12 +1,13 @@
 #![allow(dead_code)]
 pub mod blob;
-pub mod hash_value;
 pub mod storage;
 
 #[cfg(test)]
 mod tests;
 
+use anyhow::Context;
 use futures::executor::block_on;
+use std::collections::BTreeSet;
 use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -30,7 +31,7 @@ struct Block {
 }
 
 const HASH_CHANNEL_SIZE: usize = 400;
-pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Result<()> {
+pub async fn backup(storage: Storage, file: &Path) -> anyhow::Result<()> {
     let (hash_tx, mut hash_rx) = mpsc::channel::<(blake3::Hash, Block)>(HASH_CHANNEL_SIZE);
     let file_path = file.to_owned();
     let block_reader = tokio::spawn(async move {
@@ -60,26 +61,31 @@ pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Res
         Ok::<(), anyhow::Error>(())
     });
 
-    let storage_for_upload = storage.clone();
+    let storage = storage.clone();
     let upload_task = tokio::spawn(async move {
-        let (mut new_blob, doc) = if !initial {
-            let doc = storage_for_upload.get_root_metadata().await?;
-            (doc.current().clone(), Some(doc))
-        } else {
-            (Blob::empty(), None)
-        };
+        let (doc, available_hashes) =
+            tokio::try_join!(storage.get_root_metadata(), storage.available_hashes())?;
+        let mut new_blob = doc
+            .as_ref()
+            .map_or_else(Blob::empty, |d| d.current().fork());
+        let mut hashes_sent = available_hashes
+            .into_iter()
+            .map(<[u8; 32]>::from)
+            .collect::<BTreeSet<_>>();
 
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(16));
 
         while let Some((hash, block)) = hash_rx.recv().await {
             new_blob.set(block.idx, hash);
-            let storage = storage_for_upload.clone();
-            let permit = semaphore.clone().acquire_owned().await?;
-            join_set.spawn(async move {
-                let _permit = permit;
-                storage.put_block(&hash, block.data).await
-            });
+            if hashes_sent.insert(hash.into()) {
+                let permit = semaphore.clone().acquire_owned().await?;
+                let storage = storage.clone();
+                join_set.spawn(async move {
+                    let _permit = permit;
+                    storage.put_chunk(&hash, block.data).await
+                });
+            }
         }
 
         while let Some(result) = join_set.join_next().await {
@@ -94,7 +100,7 @@ pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Res
             None => Document::new(new_blob),
         };
 
-        storage_for_upload.put_root_metadata(doc).await?;
+        storage.put_root_metadata(doc).await?;
         anyhow::Ok(())
     });
 
@@ -112,10 +118,13 @@ pub async fn restore(storage: Storage, output_path: &Path) -> anyhow::Result<()>
 
     let storage_clone = storage.clone();
     let fetch_task = tokio::spawn(async move {
-        let doc: Document = storage.get_root_metadata().await?;
+        let doc: Document = storage
+            .get_root_metadata()
+            .await?
+            .context("root metadata not found")?;
         for chunk_hash in doc.current().chunk_hashes() {
-            let chunk_data = storage_clone.get_block(&chunk_hash.0).await?;
-            if chunk_hash.0 != blake3::hash(&chunk_data) {
+            let chunk_data = storage_clone.get_chunk(&chunk_hash).await?;
+            if chunk_hash != blake3::hash(&chunk_data) {
                 anyhow::bail!("hash didn't match, storage server error");
             }
             chunk_tx.send(chunk_data).await?;
