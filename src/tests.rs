@@ -43,7 +43,7 @@ async fn test_backup_and_restore() -> anyhow::Result<()> {
     assert_files_same(&test_file_path, &restore_file_path).await?;
 
     // write 1M random data at 2M offset
-    write_random_data(file, 2 * 1024 * 1024, 1024 * 1024).await?;
+    write_random_data(file.try_clone()?, 2 * 1024 * 1024, 1024 * 1024).await?;
 
     // Perform incremental backup
     crate::backup(storage.clone(), &test_file_path, false).await?;
