@@ -48,7 +48,6 @@ async fn test_backup_and_restore() -> anyhow::Result<()> {
     // Perform incremental backup
     crate::backup(storage.clone(), &test_file_path, false).await?;
 
-    dbg!(storage.get_root_metadata().await?);
     // Perform restore
     crate::restore(storage.clone(), &restore_file_path).await?;
     assert_files_same(&test_file_path, &restore_file_path).await?;
