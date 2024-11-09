@@ -4,7 +4,6 @@ pub mod hash_value;
 pub mod storage;
 
 use futures::executor::block_on;
-use hash_value::HashValue;
 use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -60,9 +59,9 @@ pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Res
 
     let storage_for_upload = storage.clone();
     let upload_task = tokio::spawn(async move {
-        let (mut blob, doc) = if !initial {
+        let (mut new_blob, doc) = if !initial {
             let doc = storage_for_upload.get_root_metadata().await?;
-            (doc.current.clone(), Some(doc))
+            (doc.current().clone(), Some(doc))
         } else {
             (Blob::default(), None)
         };
@@ -71,11 +70,7 @@ pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Res
         let semaphore = Arc::new(Semaphore::new(16));
 
         while let Some((hash, block)) = hash_rx.recv().await {
-            if blob.chunk_hashes.len() <= block.idx {
-                blob.chunk_hashes.resize(block.idx + 1, HashValue(hash));
-            } else {
-                blob.chunk_hashes[block.idx] = HashValue(hash);
-            }
+            new_blob.set(block.idx, hash);
             let storage = storage_for_upload.clone();
             let permit = semaphore.clone().acquire_owned().await?;
             join_set.spawn(async move {
@@ -90,10 +85,10 @@ pub async fn backup(storage: Storage, file: &Path, initial: bool) -> anyhow::Res
 
         let doc = match doc {
             Some(mut doc) => {
-                doc.update(blob);
+                doc.update(new_blob);
                 doc
             }
-            None => Document::new(blob),
+            None => Document::new(new_blob),
         };
 
         storage_for_upload.put_root_metadata(doc).await?;
@@ -115,8 +110,7 @@ pub async fn restore(storage: Storage, output_path: &Path) -> anyhow::Result<()>
     let storage_clone = storage.clone();
     let fetch_task = tokio::spawn(async move {
         let doc: Document = storage.get_root_metadata().await?;
-        let blob: Blob = doc.current;
-        for chunk_hash in &blob.chunk_hashes {
+        for chunk_hash in doc.current().chunk_hashes() {
             let chunk_data = storage_clone.get_block(&chunk_hash.0).await?;
             if chunk_hash.0 != blake3::hash(&chunk_data) {
                 anyhow::bail!("hash didn't match, storage server error");

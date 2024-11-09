@@ -3,48 +3,14 @@ use bincode::{Decode, Encode};
 
 #[derive(Encode, Clone, Decode, Debug, Default, PartialEq)]
 pub struct Blob {
-    pub chunk_hashes: Vec<HashValue>,
+    chunk_hashes: Vec<HashValue>,
 }
 
 // Used to store all version info for a backed up file
 #[derive(Encode, Clone, Decode, Debug)]
 pub struct Document {
-    pub current: Blob,
+    current: Blob,
     history: Vec<PrevBlob>,
-}
-
-impl Document {
-    pub fn new(blob: Blob) -> Self {
-        Self {
-            current: blob,
-            history: Vec::new(),
-        }
-    }
-
-    pub fn update(&mut self, new_blob: Blob) {
-        // Create diff from current version
-        let prev_blob = PrevBlob::from_diff(&new_blob, &self.current);
-        self.history.push(prev_blob);
-        self.current = new_blob;
-    }
-
-    pub fn get_version(&self, version: usize) -> anyhow::Result<Blob> {
-        if version >= self.history.len() + 1 {
-            anyhow::bail!("Version {} not found", version);
-        }
-
-        if version == self.history.len() {
-            return Ok(self.current.clone());
-        }
-
-        // We need to reconstruct the version by applying diffs in reverse
-        let mut current = self.current.clone();
-        for prev_blob in self.history[version..].iter().rev() {
-            current = prev_blob.compute_version(&current);
-        }
-
-        Ok(current)
-    }
 }
 
 // Stores differences between consecutive versions
@@ -54,6 +20,58 @@ struct PrevBlob {
     same_chunks_lengths: Vec<usize>,
     // Different chunks to insert between runs of same chunks
     diff_chunks: Vec<HashValue>,
+}
+
+impl Document {
+    pub fn new(blob: Blob) -> Self {
+        Self {
+            current: blob,
+            history: Vec::new(),
+        }
+    }
+    pub fn current(&self) -> &Blob {
+        &self.current
+    }
+    pub fn update(&mut self, new_blob: Blob) {
+        new_blob.verify_invariants();
+        // Create diff from current version
+        let prev_blob = PrevBlob::from_diff(&new_blob, &self.current);
+        self.history.push(prev_blob);
+        self.current = new_blob;
+    }
+
+    pub fn get_version(&self, version: usize) -> Option<Blob> {
+        if version >= self.history.len() + 1 {
+            return None;
+        }
+
+        if version == self.history.len() {
+            return Some(self.current().clone());
+        }
+
+        // We need to reconstruct the version by applying diffs in reverse
+        let mut current = self.current.clone();
+        for prev_blob in self.history[version..].iter().rev() {
+            current = prev_blob.compute(&current);
+        }
+        Some(current)
+    }
+}
+
+const FAKE_HASH: blake3::Hash = blake3::Hash::from_bytes([0; 32]);
+impl Blob {
+    pub fn set(&mut self, idx: usize, hash: blake3::Hash) {
+        if self.chunk_hashes.len() <= idx {
+            self.chunk_hashes.resize(idx + 1, HashValue(FAKE_HASH));
+        }
+        self.chunk_hashes[idx] = HashValue(hash);
+    }
+    pub fn chunk_hashes(&self) -> &[HashValue] {
+        &self.chunk_hashes
+    }
+    pub fn verify_invariants(&self) {
+        assert!(self.chunk_hashes().iter().all(|x| x.0 != FAKE_HASH));
+    }
 }
 
 impl PrevBlob {
@@ -88,7 +106,7 @@ impl PrevBlob {
         // atmost 1 different
         assert!(result.same_chunks_lengths.len() - result.diff_chunks.len() < 2);
         assert_eq!(
-            result.compute_version(current),
+            result.compute(current),
             *prev,
             "compute_version should reconstruct original"
         );
@@ -97,7 +115,7 @@ impl PrevBlob {
     }
 
     // Reconstruct a full blob from a diff and next version
-    pub fn compute_version(&self, next_version: &Blob) -> Blob {
+    pub fn compute(&self, next_version: &Blob) -> Blob {
         let mut next_chunks = next_version.chunk_hashes.iter();
         let mut diff_chunks = self.diff_chunks.iter();
         let mut chunks_hashes = Vec::new();

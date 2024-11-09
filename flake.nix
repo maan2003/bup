@@ -18,12 +18,6 @@
             pname = "bup";
             version = "0.1.0";
             src = ./.;
-            buildInputs = [
-                pkgs.udev
-            ];
-            nativeBuildInputs = [
-                pkgs.pkg-config
-             ];
             cargoLock = {
                 lockFile = ./Cargo.lock;
             };
